@@ -1,0 +1,12 @@
+﻿node_modules/
+dist/
+apps/server/public/mediapipe/
+.env
+.env.local
+*.log
+.DS_Store
+.vite/
+.capturas/
+.claude/
+tunnel/*.json
+!tunnel/config.yml

@@ -1,0 +1,30 @@
+{
+  "name": "aula-ean-visual",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plataforma academica multijugador en WebXR - fase 1 (prueba de concepto)",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "assets": "node scripts/vendor-mediapipe.mjs",
+    "postinstall": "npm run assets",
+    "predev": "npm run assets",
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @aula/server",
+    "dev:web": "npm run dev -w @aula/web",
+    "prebuild": "npm run assets",
+    "build": "npm run build -w @aula/web",
+    "start": "npm run start -w @aula/server",
+    "typecheck": "npm run typecheck -w @aula/server && npm run typecheck -w @aula/web",
+    "test:navegador": "node scripts/navegador.mjs",
+    "tunnel": "cloudflared tunnel --config tunnel/config.yml run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "puppeteer-core": "^25.12.0"
+  }
+}

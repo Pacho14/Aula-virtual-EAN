@@ -1,0 +1,42 @@
+# Cloudflare Tunnel - Aula EAN Visual, fase 1
+#
+# Un solo hostname para todo: la app, la API y el WebSocket de Colyseus salen
+# del puerto 2567 porque el transporte de Colyseus comparte su app de Express
+# con la nuestra y el servidor tambien sirve el cliente compilado.
+#
+# LO QUE ESTE TUNEL NO TRANSPORTA: el audio.
+# LiveKit mueve la voz por WebRTC sobre UDP (50000-60000, con 7881/TCP de
+# respaldo) y un tunel HTTP de Cloudflare no reenvia UDP arbitrario. El
+# signaling si pasaria, porque es WebSocket, asi que el sintoma enganna: la
+# sala conecta, los avatares se mueven y nadie se oye. Por eso LIVEKIT_URL
+# apunta fuera del tunel (LiveKit Cloud en la fase 1).
+#
+# ---------------------------------------------------------------------------
+# Puesta en marcha (una sola vez)
+#
+#   cloudflared tunnel login
+#   cloudflared tunnel create aula-ean
+#   cloudflared tunnel route dns aula-ean aula.TUDOMINIO.co
+#
+# El comando create imprime el UUID del tunel y deja el archivo de
+# credenciales en %USERPROFILE%\.cloudflared\<UUID>.json. Copia ese UUID
+# abajo y ajusta el hostname.
+#
+# Para levantarlo:   npm run tunnel
+# ---------------------------------------------------------------------------
+
+tunnel: REEMPLAZAR-CON-EL-UUID-DEL-TUNEL
+credentials-file: C:\Users\Pacho\.cloudflared\REEMPLAZAR-CON-EL-UUID-DEL-TUNEL.json
+
+ingress:
+  - hostname: aula.TUDOMINIO.co
+    service: http://localhost:2567
+    originRequest:
+      # Colyseus mantiene el WebSocket abierto toda la clase; el valor por
+      # defecto lo cortaria a la mitad de una sesion.
+      connectTimeout: 30s
+      noTLSVerify: true
+      disableChunkedEncoding: false
+
+  # Regla final obligatoria.
+  - service: http_status:404
