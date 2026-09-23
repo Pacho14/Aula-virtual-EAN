@@ -223,6 +223,11 @@ Son deliberados, no pendientes olvidados:
 - **Sin tareas ni retroalimentación.** Fase 2, según la sección 08 del documento
   de arquitectura.
 
+## Dónde retomar
+
+[docs/siguiente-fase.md](docs/siguiente-fase.md) dice en qué punto quedó el
+trabajo, qué falta para cerrar la fase 1 y qué viene en la fase 2.
+
 ## Qué medir antes de cerrar la fase 1
 
 El criterio de éxito es *30 fps en celular de gama media y gestos usables sin
