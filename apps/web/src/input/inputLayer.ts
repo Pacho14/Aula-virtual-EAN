@@ -23,6 +23,7 @@ type Listener = (action: InputAction) => void;
 export class InputLayer {
   private source: InputSource | null = null;
   private listeners = new Set<Listener>();
+  private latest: InputFrame = emptyFrame("mouse");
 
   private previousGesture: string = "none";
   private raiseSince = 0;
@@ -30,6 +31,17 @@ export class InputLayer {
 
   get kind() {
     return this.source?.kind ?? "mouse";
+  }
+
+  /**
+   * El ultimo cuadro, sin avanzar nada.
+   *
+   * `tick` ademas emite acciones, asi que llamarlo dos veces por cuadro
+   * dispararia cada gesto por duplicado. Los controles en pantalla, que corren
+   * en su propio bucle fuera de la escena, leen por aqui.
+   */
+  peek(): InputFrame {
+    return this.latest;
   }
 
   on(listener: Listener): () => void {
@@ -65,8 +77,12 @@ export class InputLayer {
    * paso, emite las acciones que se desprenden de los cambios de gesto.
    */
   tick(now: number): InputFrame {
-    if (!this.source) return emptyFrame("mouse");
+    if (!this.source) {
+      this.latest = emptyFrame("mouse");
+      return this.latest;
+    }
     const frame = this.source.read();
+    this.latest = frame;
     const hand = frame.primary;
     const gesture = hand?.gesture ?? "none";
 

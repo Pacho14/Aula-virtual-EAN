@@ -202,6 +202,7 @@ function toHandFrame(hand: WorkerHand): HandFrame {
     span: hand.span,
     gesture: hand.gesture,
     pinch: hand.pinch,
+    landmarks: hand.landmarks,
   };
 }
 

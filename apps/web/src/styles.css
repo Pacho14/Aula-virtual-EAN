@@ -544,3 +544,243 @@ input:focus-visible {
     transition: none !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Controles de cámara y vista de puntos de la mano
+   ---------------------------------------------------------------------------
+   El contenedor no recibe punteros: si los recibiera, taparía media escena
+   para el rayo del cursor. Solo los controles de dentro son tocables.
+*/
+.camctl {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.camctl > * {
+  pointer-events: auto;
+}
+
+/*
+  Arriba en el centro: las esquinas las ocupan los paneles de la escena y los
+  rotulos del HUD, y una cabecera encima de "Objetos" tapa justo lo que hay
+  que leer para usarlo.
+*/
+.camctl-head {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(13, 18, 19, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 6px 8px 6px 14px;
+  font-size: 0.78rem;
+  color: #dfe9e8;
+  backdrop-filter: blur(6px);
+}
+
+.camctl-head button {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 4px 12px;
+}
+
+.camctl-head button:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.camctl-check {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(13, 18, 19, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.76rem;
+  color: #dfe9e8;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.camctl-slider {
+  position: absolute;
+  display: flex;
+  gap: 8px;
+}
+
+.camctl-slider.h {
+  left: 50%;
+  bottom: 84px;
+  width: min(460px, 62vw);
+  transform: translateX(-50%);
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/*
+  A la izquierda, no a la derecha: en el lobby la tabla de clases ocupa ese
+  lado, y un deslizador encima de ella tapa justo lo que hay que leer.
+*/
+.camctl-slider.v {
+  left: 22px;
+  top: 50%;
+  height: min(300px, 44vh);
+  transform: translateY(-50%);
+  flex-direction: row-reverse;
+  align-items: center;
+}
+
+.camctl-label {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #b9c9c7;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+
+.camctl-slider.v .camctl-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.camctl-label b {
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.camctl-track {
+  position: relative;
+  background: rgba(13, 18, 19, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.camctl-track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.camctl-slider.h .camctl-track {
+  height: 16px;
+  width: 100%;
+}
+
+.camctl-slider.v .camctl-track {
+  width: 16px;
+  height: 100%;
+}
+
+/* La marca del centro: el 0°, para saber dónde está el frente sin soltar. */
+.camctl-mid {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.camctl-slider.h .camctl-mid {
+  left: 50%;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+}
+
+.camctl-slider.v .camctl-mid {
+  top: 50%;
+  left: 3px;
+  right: 3px;
+  height: 1px;
+}
+
+.camctl-knob {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #eef5f4;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.camctl-slider.h .camctl-knob {
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.camctl-slider.v .camctl-knob {
+  left: 50%;
+  transform: translate(-50%, 50%);
+}
+
+/* El punto que sigue a la mano sobre la interfaz de pantalla. */
+.camctl-hand {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid #f2f6f6;
+  background: rgba(18, 147, 138, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: background 120ms ease;
+}
+
+.camctl-hand[data-pinch="si"] {
+  background: var(--accent);
+  box-shadow: 0 0 0 5px rgba(18, 147, 138, 0.25);
+}
+
+.landmarks {
+  position: fixed;
+  left: 14px;
+  top: 58px;
+  width: 200px;
+  height: 150px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* Dos campos cortos en una fila: "cuántos" y "cuánto dura" se leen juntos. */
+.field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.field-row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Cerrar la clase no es salir: deja el salón libre para el siguiente. */
+.icon.danger {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  color: #f3d9bd;
+}
+
+.icon.danger:hover {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  border-color: var(--warn);
+}

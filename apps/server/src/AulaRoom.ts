@@ -1,5 +1,5 @@
 import { Room, type Client } from "colyseus";
-import { AulaState, ENV_HEIGHT, ENV_ROTATION, Hand, Player, SceneObject, GESTURE } from "./state";
+import { AulaState, ENV_POS, ENV_ROT, ENV_SCALE, Hand, Player, SceneObject, GESTURE } from "./state";
 import {
   aimAt,
   isPrimitiveName,
@@ -11,7 +11,7 @@ import {
   type Scene,
 } from "./scene";
 import { isKnownEnvironment } from "./environments";
-import { consumeTicket, removeSessionByRoomId, type Ticket } from "./tickets";
+import { consumeTicket, markLive, removeSessionByRoomId, type Ticket } from "./tickets";
 
 /**
  * Mensaje de pose. Se envia como arreglo plano de numeros para no pagar
@@ -147,22 +147,34 @@ export class AulaRoom extends Room<{ state: AulaState }> {
 
     this.onMessage(
       "env",
-      (client, message: { id?: unknown; yaw?: unknown; pitch?: unknown; height?: unknown }) => {
-        // El entorno si se puede cambiar en vivo: girar el paisaje a media
-        // clase es parte de mostrarlo, no de armarlo.
-        if (!this.isTeacher(client.sessionId)) return;
+      (
+        client,
+        message: {
+          id?: unknown;
+          x?: unknown;
+          y?: unknown;
+          z?: unknown;
+          rot?: unknown;
+          scale?: unknown;
+        },
+      ) => {
+        // Colocar el entorno es parte de armar el salon, no de darlo: una vez
+        // abierta la clase, el paisaje se queda donde el profesor lo dejo.
+        if (!this.canEdit(client.sessionId)) return;
 
         if (typeof message?.id === "string" && isKnownEnvironment(message.id)) {
           this.state.envId = message.id;
         }
-        if (isNumber(message?.yaw)) {
-          this.state.envYaw = clamp(message.yaw, ENV_ROTATION.min, ENV_ROTATION.max);
+        if (isNumber(message?.x)) this.state.envX = clamp(message.x, ENV_POS.min, ENV_POS.max);
+        if (isNumber(message?.y)) this.state.envY = clamp(message.y, ENV_POS.min, ENV_POS.max);
+        if (isNumber(message?.z)) this.state.envZ = clamp(message.z, ENV_POS.min, ENV_POS.max);
+        if (isNumber(message?.rot)) {
+          // El giro da la vuelta entera: 359 grados y 1 grado son vecinos.
+          const turn = ENV_ROT.max;
+          this.state.envRot = ((message.rot % turn) + turn) % turn;
         }
-        if (isNumber(message?.pitch)) {
-          this.state.envPitch = clamp(message.pitch, ENV_ROTATION.min, ENV_ROTATION.max);
-        }
-        if (isNumber(message?.height)) {
-          this.state.envHeight = clamp(message.height, ENV_HEIGHT.min, ENV_HEIGHT.max);
+        if (isNumber(message?.scale)) {
+          this.state.envScale = clamp(message.scale, ENV_SCALE.min, ENV_SCALE.max);
         }
       },
     );
@@ -171,6 +183,21 @@ export class AulaRoom extends Room<{ state: AulaState }> {
       if (!this.canEdit(client.sessionId)) return;
       this.state.phase = "live";
       this.setMetadata({ phase: "live", roomName: this.state.roomName });
+      // El reloj del lobby cuenta desde aqui, no desde que se creo la sala.
+      markLive(this.roomId);
+    });
+
+    /**
+     * Cerrar la clase. Solo el profesor.
+     *
+     * Hace falta porque los salones son tres y solo admiten una clase cada
+     * uno: sin esto, quien termina a las diez deja el salon ocupado
+     * cuarenta y cinco minutos y el siguiente profesor no puede abrir.
+     */
+    this.onMessage("close", (client) => {
+      if (!this.isTeacher(client.sessionId)) return;
+      this.broadcast("closed", { by: this.state.players.get(client.sessionId)?.alias ?? "" });
+      this.disconnect();
     });
 
     // Como autoDispose esta apagado, la sala se recoge sola cuando lleva un

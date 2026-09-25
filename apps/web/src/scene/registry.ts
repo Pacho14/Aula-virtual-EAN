@@ -54,7 +54,9 @@ export const AUTO_GRAB_WINDOW_MS = 1500;
  * siente pegajoso. En null cuando nadie los está tocando.
  */
 export const envPredicted = {
-  yaw: null as number | null,
-  pitch: null as number | null,
-  height: null as number | null,
+  x: null as number | null,
+  y: null as number | null,
+  z: null as number | null,
+  rot: null as number | null,
+  scale: null as number | null,
 };

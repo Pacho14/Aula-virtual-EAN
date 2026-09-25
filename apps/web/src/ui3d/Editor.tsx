@@ -27,11 +27,24 @@ import { Button3D, Panel, Slider3D } from "./parts";
 import { INK, label, makeSheet, paint, panelBackground, UI_ORDER } from "./surface";
 import { clearWidgets } from "./widgets";
 
-/** Recorrido de los dos deslizadores: 180 grados, de -90 a +90. */
-const HALF_TURN = Math.PI / 2;
-/** Cuánto giran y suben los botones de ubicación en cada pulsación. */
-const NUDGE_ANGLE = (5 * Math.PI) / 180;
-const NUDGE_HEIGHT = 0.05;
+/**
+ * Recorridos del panel de transformación del entorno.
+ *
+ * El servidor recorta más ancho que esto; aquí van los rangos con los que se
+ * trabaja de verdad. Encajar una foto de 360 grados con un salón es cosa de
+ * palmos, no de decenas de metros, y un deslizador que cubra ±8 m no se puede
+ * afinar con la mano.
+ */
+const RANGO = {
+  x: 5,
+  y: 3,
+  z: 5,
+  escalaMin: 0.25,
+  escalaMax: 4,
+};
+
+/** El giro del entorno da la vuelta entera. */
+const VUELTA = Math.PI * 2;
 
 /**
  * Donde se cuelgan los paneles alrededor del profesor.
@@ -72,13 +85,12 @@ export function Editor({
     const eye: [number, number, number] = [spot.pos[0], 1.6, spot.pos[2]];
     const yaw = aimYaw(eye, scene.focus);
     return {
-      carousel: anchor(eye, yaw, -SIDE, REACH, 0.1),
-      envPlace: anchor(eye, yaw, -SIDE, REACH, -0.38),
+      carousel: anchor(eye, yaw, -SIDE, REACH, 0.16),
+      // El panel de transformación va debajo del carrusel, en la misma
+      // columna: se elige un entorno y se coloca sin cambiar de sitio.
+      transform: anchor(eye, yaw, -SIDE, REACH, -0.54),
       palette: anchor(eye, yaw, SIDE, REACH, 0.12),
       review: anchor(eye, yaw, SIDE, REACH, -0.4),
-      // Bien abajo: unos centímetros más arriba y el panel se planta justo
-      // sobre el tablero, que es donde el profesor tiene que ver lo que pone.
-      sliders: anchor(eye, yaw, 0, 1.45, -0.87),
       preview: anchor(eye, yaw, 0, 1.45, 0.02),
     };
   }, [room, scene, sessionId]);
@@ -93,9 +105,11 @@ export function Editor({
 
   const pushEnv = useCallback((patch: Record<string, number | string>) => {
     pending.current = { ...(pending.current ?? {}), ...patch };
-    if (typeof patch.yaw === "number") envPredicted.yaw = patch.yaw;
-    if (typeof patch.pitch === "number") envPredicted.pitch = patch.pitch;
-    if (typeof patch.height === "number") envPredicted.height = patch.height;
+    if (typeof patch.x === "number") envPredicted.x = patch.x;
+    if (typeof patch.y === "number") envPredicted.y = patch.y;
+    if (typeof patch.z === "number") envPredicted.z = patch.z;
+    if (typeof patch.rot === "number") envPredicted.rot = patch.rot;
+    if (typeof patch.scale === "number") envPredicted.scale = patch.scale;
   }, []);
 
   useFrame(() => {
@@ -110,13 +124,17 @@ export function Editor({
   // Al salir del editor la predicción se apaga: de ahí en adelante manda el
   // estado de la sala, que es lo que ven todos los demás.
   useEffect(() => {
-    envPredicted.yaw = room.state.envYaw;
-    envPredicted.pitch = room.state.envPitch;
-    envPredicted.height = room.state.envHeight;
+    envPredicted.x = room.state.envX;
+    envPredicted.y = room.state.envY;
+    envPredicted.z = room.state.envZ;
+    envPredicted.rot = room.state.envRot;
+    envPredicted.scale = room.state.envScale;
     return () => {
-      envPredicted.yaw = null;
-      envPredicted.pitch = null;
-      envPredicted.height = null;
+      envPredicted.x = null;
+      envPredicted.y = null;
+      envPredicted.z = null;
+      envPredicted.rot = null;
+      envPredicted.scale = null;
     };
   }, [room]);
 
@@ -139,9 +157,11 @@ export function Editor({
   // puntero seguiría chocando contra paneles que ya nadie dibuja.
   useEffect(() => clearWidgets, []);
 
-  const readYaw = useCallback(() => envPredicted.yaw ?? room.state.envYaw, [room]);
-  const readPitch = useCallback(() => envPredicted.pitch ?? room.state.envPitch, [room]);
-  const readHeight = useCallback(() => envPredicted.height ?? room.state.envHeight, [room]);
+  const readX = useCallback(() => envPredicted.x ?? room.state.envX, [room]);
+  const readY = useCallback(() => envPredicted.y ?? room.state.envY, [room]);
+  const readZ = useCallback(() => envPredicted.z ?? room.state.envZ, [room]);
+  const readRot = useCallback(() => envPredicted.rot ?? room.state.envRot, [room]);
+  const readScale = useCallback(() => envPredicted.scale ?? room.state.envScale, [room]);
 
   // --- piezas puestas -----------------------------------------------------
   const pieces = objectIds.filter((id) => !room.state.objects.get(id)?.locked);
@@ -200,26 +220,63 @@ export function Editor({
         </Panel>
       </group>
 
-      {/* --- ubicar el entorno en el espacio --- */}
-      <group position={places.envPlace.position} rotation={places.envPlace.rotation}>
-        <Panel width={0.54} height={0.32} title="Ubicar el entorno">
-          <Nudge
-            y={0.02}
-            text="Girar"
-            idLess="env-yaw-less"
-            idMore="env-yaw-more"
-            onLess={() => pushEnv({ yaw: clamp(readYaw() - NUDGE_ANGLE, -HALF_TURN, HALF_TURN) })}
-            onMore={() => pushEnv({ yaw: clamp(readYaw() + NUDGE_ANGLE, -HALF_TURN, HALF_TURN) })}
+      {/* --- transformar el entorno --- */}
+      <group position={places.transform.position} rotation={places.transform.rotation}>
+        <Panel width={0.66} height={0.8} title="Transformar el entorno">
+          <Slider3D
+            id="env-x"
+            position={[0, 0.17, 0.006]}
+            length={0.52}
+            text="Posición X"
+            min={-RANGO.x}
+            max={RANGO.x}
+            value={readX}
+            format={metros}
+            onChange={(value) => pushEnv({ x: value })}
           />
-          <Nudge
-            y={-0.09}
-            text="Altura"
-            idLess="env-down"
-            idMore="env-up"
-            less="▼"
-            more="▲"
-            onLess={() => pushEnv({ height: clamp(readHeight() - NUDGE_HEIGHT, -1.5, 1.5) })}
-            onMore={() => pushEnv({ height: clamp(readHeight() + NUDGE_HEIGHT, -1.5, 1.5) })}
+          <Slider3D
+            id="env-y"
+            position={[0, 0.05, 0.006]}
+            length={0.52}
+            text="Posición Y"
+            min={-RANGO.y}
+            max={RANGO.y}
+            value={readY}
+            format={metros}
+            onChange={(value) => pushEnv({ y: value })}
+          />
+          <Slider3D
+            id="env-z"
+            position={[0, -0.07, 0.006]}
+            length={0.52}
+            text="Posición Z"
+            min={-RANGO.z}
+            max={RANGO.z}
+            value={readZ}
+            format={metros}
+            onChange={(value) => pushEnv({ z: value })}
+          />
+          <Slider3D
+            id="env-rot"
+            position={[0, -0.19, 0.006]}
+            length={0.52}
+            text="Rotación"
+            min={0}
+            max={VUELTA}
+            value={readRot}
+            format={grados}
+            onChange={(value) => pushEnv({ rot: value })}
+          />
+          <Slider3D
+            id="env-scale"
+            position={[0, -0.31, 0.006]}
+            length={0.52}
+            text="Escala"
+            min={RANGO.escalaMin}
+            max={RANGO.escalaMax}
+            value={readScale}
+            format={veces}
+            onChange={(value) => pushEnv({ scale: value })}
           />
         </Panel>
       </group>
@@ -284,33 +341,6 @@ export function Editor({
         </Panel>
       </group>
 
-      {/* --- los dos deslizadores de giro --- */}
-      <group position={places.sliders.position} rotation={places.sliders.rotation}>
-        <Panel width={0.82} height={0.32} title="Explorar el escenario">
-          <Slider3D
-            id="slider-yaw"
-            position={[0, -0.01, 0.006]}
-            length={0.66}
-            text="Girar horizontal"
-            min={-HALF_TURN}
-            max={HALF_TURN}
-            value={readYaw}
-            format={degrees}
-            onChange={(value) => pushEnv({ yaw: value })}
-          />
-          <Slider3D
-            id="slider-pitch"
-            position={[0, -0.12, 0.006]}
-            length={0.66}
-            text="Girar vertical"
-            min={-HALF_TURN}
-            max={HALF_TURN}
-            value={readPitch}
-            format={degrees}
-            onChange={(value) => pushEnv({ pitch: value })}
-          />
-        </Panel>
-      </group>
     </group>
   );
 }
@@ -462,59 +492,6 @@ function Carousel({
 // Piezas menores
 // ---------------------------------------------------------------------------
 
-/** Una fila de "menos / etiqueta / más". */
-function Nudge({
-  y,
-  text,
-  idLess,
-  idMore,
-  less = "◀",
-  more = "▶",
-  onLess,
-  onMore,
-}: {
-  y: number;
-  text: string;
-  idLess: string;
-  idMore: string;
-  less?: string;
-  more?: string;
-  onLess: () => void;
-  onMore: () => void;
-}) {
-  const sheet = useMemo(() => makeSheet(0.22, 0.08), []);
-  useEffect(() => {
-    paint(sheet, (ctx, w, h) => {
-      label(ctx, text, w / 2, h / 2, { size: 24, align: "center", color: INK.dim });
-    });
-  }, [sheet, text]);
-
-  return (
-    <group position={[0, y, 0]}>
-      <Button3D
-        id={idLess}
-        position={[-0.17, 0, 0.004]}
-        width={0.1}
-        height={0.09}
-        text={less}
-        onActivate={onLess}
-      />
-      <mesh position={[0, 0, 0.004]} renderOrder={UI_ORDER.text} raycast={() => null}>
-        <planeGeometry args={[0.22, 0.08]} />
-        <meshBasicMaterial map={sheet.texture} transparent depthWrite={false} toneMapped={false} />
-      </mesh>
-      <Button3D
-        id={idMore}
-        position={[0.17, 0, 0.004]}
-        width={0.1}
-        height={0.09}
-        text={more}
-        onActivate={onMore}
-      />
-    </group>
-  );
-}
-
 /**
  * La vista previa antes de abrir el salón.
  *
@@ -648,10 +625,14 @@ function aimYaw(
   return Math.atan2(-(to[0] - from[0]), -(to[2] - from[2]));
 }
 
-function degrees(radians: number) {
+function grados(radians: number) {
   return `${Math.round((radians * 180) / Math.PI)}°`;
 }
 
-function clamp(value: number, min: number, max: number) {
-  return value < min ? min : value > max ? max : value;
+function metros(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)} m`;
+}
+
+function veces(value: number) {
+  return `${value.toFixed(2)}×`;
 }

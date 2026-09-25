@@ -34,7 +34,12 @@ check(sinCodigo.status === 401, "sin codigo se rechaza", `HTTP ${sinCodigo.statu
 const codigoMalo = await call("/api/sessions", { code: "incorrecto" });
 check(codigoMalo.status === 401, "codigo incorrecto se rechaza", `HTTP ${codigoMalo.status}`);
 
-const creado = await call("/api/sessions", { code: CODE, roomName: "Taller", students: 3 });
+const creado = await call("/api/sessions", {
+  code: CODE,
+  salon: 1,
+  roomName: "Taller",
+  students: 3,
+});
 check(creado.status === 200, "con el codigo correcto se crea", `PIN ${creado.body.pin}`);
 check(Boolean(creado.body.hostToken), "devuelve credencial de profesor");
 
@@ -102,6 +107,16 @@ await salaAlumno.leave();
 await sleep(2500);
 const revuelta = await call("/api/join", { pin, alias: "Rezagado" });
 check(revuelta.status === 200, "se puede volver a entrar tras quedar vacio", `HTTP ${revuelta.status}`);
+
+// El salon es uno de tres: dejarlo abierto bloquearia la siguiente prueba.
+const cierre = await call("/api/join", { pin, alias: "Profe", hostToken });
+if (cierre.status === 200) {
+  const cCierre = new Client(API);
+  const salaCierre = await cCierre.joinById(cierre.body.roomId, { ticket: cierre.body.ticket });
+  await sleep(300);
+  salaCierre.send("close");
+  await sleep(600);
+}
 
 console.log(fallos === 0 ? "\nTodo pasa." : `\n${fallos} comprobacion(es) fallaron.`);
 process.exit(fallos === 0 ? 0 : 1);

@@ -135,17 +135,22 @@ export function Environment360({
     };
   }, [gl, scene, texture]);
 
-  // El giro y la altura llegan en el estado a 20 Hz mientras el profesor
-  // arrastra un deslizador, así que se leen aquí y no por React.
+  // La colocación llega en el estado a 20 Hz mientras el profesor arrastra un
+  // control, así que se lee aquí y no por React.
   useFrame(() => {
     const group = sphere.current;
     if (!group) return;
-    const yaw = envPredicted.yaw ?? room.state.envYaw;
-    const pitch = envPredicted.pitch ?? room.state.envPitch;
-    const height = envPredicted.height ?? room.state.envHeight;
-    group.rotation.set(pitch, yaw, 0, "YXZ");
-    group.position.y = height;
-    scene.environmentRotation.set(pitch, yaw, 0, "YXZ");
+    const rot = envPredicted.rot ?? room.state.envRot;
+    group.position.set(
+      envPredicted.x ?? room.state.envX,
+      envPredicted.y ?? room.state.envY,
+      envPredicted.z ?? room.state.envZ,
+    );
+    group.rotation.set(0, rot, 0);
+    group.scale.setScalar(envPredicted.scale ?? room.state.envScale);
+    // La luz de la escena sale de la misma foto: si el paisaje gira, la luz
+    // gira con él, o el sol acaba saliendo por donde no hay cielo.
+    scene.environmentRotation.set(0, rot, 0);
   });
 
   if (!texture) return null;

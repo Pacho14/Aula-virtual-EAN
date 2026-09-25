@@ -7,10 +7,17 @@
  */
 import { randomInt, randomUUID } from "node:crypto";
 import type { Scene } from "./scene";
+import type { SalonId } from "./salones";
 
 export interface Session {
   pin: string;
   roomId: string;
+  /** En cual de los tres salones se abrio la clase. */
+  salon: SalonId;
+  /** Lo que el profesor calculo que va a durar, en minutos. */
+  minutos: number;
+  /** Cuando paso a en vivo, o null mientras se arma. Alimenta el reloj del lobby. */
+  liveAt: number | null;
   /**
    * La escena con la que nacio el salon.
    *
@@ -76,7 +83,13 @@ export function reservePin(): string {
   throw new Error("No se pudo generar un PIN libre.");
 }
 
-export function createSession(pin: string, roomId: string, scene: Scene): Session {
+export function createSession(
+  pin: string,
+  roomId: string,
+  scene: Scene,
+  salon: SalonId,
+  minutos: number,
+): Session {
   sweep();
   reserved.delete(pin);
 
@@ -84,6 +97,9 @@ export function createSession(pin: string, roomId: string, scene: Scene): Sessio
   const session: Session = {
     pin,
     roomId,
+    salon,
+    minutos,
+    liveAt: null,
     scene,
     hostToken: randomUUID(),
     createdAt: now,
@@ -113,6 +129,27 @@ export function removeSessionByRoomId(roomId: string) {
 export function listSessions(): Session[] {
   sweep();
   return [...sessions.values()];
+}
+
+/** La clase abierta en un salon, si la hay. Un salon admite una a la vez. */
+export function findSessionBySalon(salon: SalonId): Session | undefined {
+  sweep();
+  for (const session of sessions.values()) {
+    if (session.salon === salon) return session;
+  }
+  return undefined;
+}
+
+/**
+ * Marca que la clase empezo. Lo llama la sala al publicarse.
+ *
+ * El registro de tiempo del lobby cuenta desde que el profesor pulsa comenzar,
+ * no desde que creo la sala: el rato que pase armandola no es clase.
+ */
+export function markLive(roomId: string) {
+  for (const session of sessions.values()) {
+    if (session.roomId === roomId && session.liveAt === null) session.liveAt = Date.now();
+  }
 }
 
 export function issueTicket(roomId: string, alias: string, role: "teacher" | "student") {

@@ -84,9 +84,24 @@ export class WidgetPointer {
       return true;
     }
 
+    // Pellizcar o cerrar la mano pulsa siempre, aunque sea el mismo boton que
+    // la vez anterior: un codigo con dos digitos iguales seguidos se escribe
+    // pulsando dos veces sin mover la mano, y con el guardia de repique
+    // puesto la segunda pulsacion no llegaba nunca.
+    if (select || press) {
+      this.firedFor = widget.id;
+      this.since = now;
+      pointer.dwell = 0;
+      widget.activate?.();
+      return true;
+    }
+
+    // La espera sostenida si lleva guardia: si no, quedarse mirando un boton
+    // lo dispararia una vez por segundo. Para repetir por esta via hay que
+    // salir y volver.
     const dwell = Math.min(1, (now - this.since) / DWELL_MS);
     pointer.dwell = dwell;
-    if ((select || press || dwell >= 1) && this.firedFor !== widget.id) {
+    if (dwell >= 1 && this.firedFor !== widget.id) {
       this.firedFor = widget.id;
       pointer.dwell = 0;
       widget.activate?.();

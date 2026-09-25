@@ -5,6 +5,8 @@ export type InputMode = "camera" | "mouse";
 
 /** El mismo tope que aplica el servidor en makeScene. */
 const MAX_STUDENTS = 12;
+/** Los tres salones del lobby. */
+const SALONES = [1, 2, 3] as const;
 
 /**
  * Se guarda el salón creado para que recargar la página no le quite la clase
@@ -23,33 +25,39 @@ function loadStored(): CreatedSession | null {
   }
 }
 
+/** Forma de correo, nada más. Ver el comentario en el campo. */
+const CORREO = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 export function JoinScreen({
   onJoin,
+  onLobby,
   busy,
   status,
   error,
 }: {
-  onJoin: (pin: string, alias: string, mode: InputMode, hostToken?: string) => void;
+  /** Entrada del profesor al salón que acaba de crear. */
+  onJoin: (pin: string, alias: string, mode: InputMode, hostToken: string) => void;
+  /** Entrada del estudiante al lobby: todavía no tiene ningún código. */
+  onLobby: (identity: { email: string; displayName: string }, mode: InputMode) => void;
   busy: boolean;
   status: string;
   error: string | null;
 }) {
   const [tab, setTab] = useState<"student" | "teacher">("student");
-  const [pin, setPin] = useState("");
-  const [alias, setAlias] = useState("");
   const [mode, setMode] = useState<InputMode>("camera");
 
+  // --- estudiante ---------------------------------------------------------
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+
+  // --- profesor -----------------------------------------------------------
   const [code, setCode] = useState("");
+  const [salon, setSalon] = useState<number>(1);
   const [roomName, setRoomName] = useState("");
-  /**
-   * Se guarda como texto y se ajusta al crear, no en cada tecla.
-   *
-   * Recortando al vuelo, reemplazar un 5 por un 8 escribe "58" y el campo lo
-   * corrige a 12 delante de quien escribe. Eso confunde mucho más que ver el
-   * número fuera de rango un segundo.
-   */
   const [students, setStudents] = useState("5");
-  const [salon, setSalon] = useState<CreatedSession | null>(null);
+  const [minutos, setMinutos] = useState("120");
+  const [alias, setAlias] = useState("");
+  const [created, setCreated] = useState<CreatedSession | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -57,7 +65,7 @@ export function JoinScreen({
   useEffect(() => {
     const stored = loadStored();
     if (stored) {
-      setSalon(stored);
+      setCreated(stored);
       setTab("teacher");
     }
   }, []);
@@ -66,13 +74,15 @@ export function JoinScreen({
     setCreating(true);
     setCreateError(null);
     try {
-      const created = await createSession(
-        code.trim(),
-        roomName.trim(),
-        Math.min(MAX_STUDENTS, Math.max(1, Number(students) || 5)),
-      );
-      setSalon(created);
-      sessionStorage.setItem(STORE_KEY, JSON.stringify(created));
+      const session = await createSession({
+        code: code.trim(),
+        roomName: roomName.trim(),
+        students: clamp(Number(students) || 5, 1, MAX_STUDENTS),
+        salon,
+        minutos: clamp(Number(minutos) || 60, 5, 8 * 60),
+      });
+      setCreated(session);
+      sessionStorage.setItem(STORE_KEY, JSON.stringify(session));
     } catch (problem) {
       setCreateError((problem as Error).message);
     } finally {
@@ -82,13 +92,12 @@ export function JoinScreen({
 
   function discard() {
     sessionStorage.removeItem(STORE_KEY);
-    setSalon(null);
+    setCreated(null);
     setCopied(false);
   }
 
-  const isTeacher = tab === "teacher" && salon !== null;
-  const effectivePin = isTeacher ? salon.pin : pin;
-  const canSubmit = /^\d{6}$/.test(effectivePin) && alias.trim().length >= 2 && !busy;
+  const studentReady = CORREO.test(email.trim()) && displayName.trim().length >= 2 && !busy;
+  const teacherReady = created !== null && alias.trim().length >= 2 && !busy;
 
   return (
     <div className="join">
@@ -96,12 +105,16 @@ export function JoinScreen({
         className="join-card"
         onSubmit={(event) => {
           event.preventDefault();
-          if (canSubmit) {
-            onJoin(effectivePin, alias.trim(), mode, isTeacher ? salon.hostToken : undefined);
+          if (tab === "student") {
+            if (studentReady) {
+              onLobby({ email: email.trim(), displayName: displayName.trim() }, mode);
+            }
+          } else if (teacherReady && created) {
+            onJoin(created.pin, alias.trim(), mode, created.hostToken);
           }
         }}
       >
-        <p className="eyebrow">Aula EAN Visual · fase 1</p>
+        <p className="eyebrow">Aula EAN Visual</p>
 
         <div className="tabs" role="tablist">
           <button
@@ -126,42 +139,56 @@ export function JoinScreen({
 
         {tab === "student" ? (
           <>
-            <h1>Entra al salón</h1>
+            <h1>Entra a la experiencia</h1>
             <p className="lede">
-              Necesitas el PIN de seis dígitos que te compartió tu profesor. La cámara se
-              usa solo para leer tus manos: el video no sale de este dispositivo.
+              No necesitas ningún código todavía. Entras al lobby, ves los tres salones y
+              su estado, y el código te hará falta al elegir uno.
             </p>
+
             <label className="field">
-              <span>PIN del salón</span>
+              <span>Correo institucional</span>
               <input
-                id="pin"
-                value={pin}
-                onChange={(event) =>
-                  setPin(event.target.value.replace(/\D/g, "").slice(0, 6))
-                }
-                placeholder="000000"
-                inputMode="numeric"
-                className="pin-input"
+                id="email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="estudiante@universidad.edu"
+                autoComplete="email"
+                inputMode="email"
+              />
+            </label>
+
+            <label className="field">
+              <span>¿Cómo quieres que te vean?</span>
+              <input
+                id="alias"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                placeholder="Juan"
+                maxLength={32}
                 autoComplete="off"
               />
             </label>
+            <p className="hint">
+              Ese es el nombre que llevará tu avatar dentro de la clase.
+            </p>
           </>
-        ) : salon ? (
+        ) : created ? (
           <>
-            <h1>{salon.roomName}</h1>
+            <h1>{created.roomName}</h1>
             <p className="lede">
-              El salón ya existe. Entra tú primero a armar la escena: mientras la armas
-              nadie puede entrar, y el PIN empieza a servir cuando pulses comenzar.
+              Salón {created.salon}. Entra tú primero a armar la escena: mientras la armas
+              nadie puede entrar, y el código empieza a servir cuando pulses comenzar.
             </p>
             <div className="pin-show">
-              <span>PIN</span>
-              <b>{salon.pin}</b>
+              <span>Código</span>
+              <b>{created.pin}</b>
               <button
                 type="button"
                 className="ghost small"
                 onClick={async () => {
                   try {
-                    await navigator.clipboard.writeText(salon.pin);
+                    await navigator.clipboard.writeText(created.pin);
                     setCopied(true);
                     setTimeout(() => setCopied(false), 1800);
                   } catch {
@@ -174,27 +201,45 @@ export function JoinScreen({
             </div>
             <dl className="summary">
               <div>
-                <dt>Estudiantes</dt>
-                <dd>{salon.students}</dd>
+                <dt>Salón</dt>
+                <dd>{created.salon}</dd>
               </div>
               <div>
-                <dt>Cupo con el profesor</dt>
-                <dd>{salon.students + 1}</dd>
+                <dt>Estudiantes</dt>
+                <dd>{created.students}</dd>
+              </div>
+              <div>
+                <dt>Duración</dt>
+                <dd>{formatMinutes(created.minutos)}</dd>
               </div>
             </dl>
+
+            <label className="field">
+              <span>¿Cómo quieres que te vean?</span>
+              <input
+                id="alias"
+                value={alias}
+                onChange={(event) => setAlias(event.target.value)}
+                placeholder="Profesora Ramírez"
+                maxLength={32}
+                autoComplete="off"
+              />
+            </label>
+
             <p className="hint">
-              Eres el único con el control del salón: esa credencial vive solo en este
-              navegador. Reparte el PIN cuando quieras; quien llegue antes de tiempo
-              verá que estás preparando la sala y entrará solo al abrirla.
+              Eres la única persona con el control de este salón: esa credencial vive solo
+              en este navegador. Reparte el código cuando quieras; quien llegue antes de
+              tiempo verá en su portal que estás preparando la sala.
             </p>
           </>
         ) : (
           <>
-            <h1>Crea el salón</h1>
+            <h1>Abre una clase</h1>
             <p className="lede">
-              Solo un profesor puede abrir salones. El código aparece en la consola del
-              servidor al arrancar.
+              Solo un profesor puede abrir salones. El código de profesor aparece en la
+              consola del servidor al arrancar.
             </p>
+
             <label className="field">
               <span>Código de profesor</span>
               <input
@@ -205,62 +250,82 @@ export function JoinScreen({
                 autoComplete="off"
               />
             </label>
+
+            <fieldset className="choice">
+              <legend>¿En qué salón?</legend>
+              {SALONES.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className={salon === n ? "on" : ""}
+                  onClick={() => setSalon(n)}
+                >
+                  Salón {n}
+                </button>
+              ))}
+            </fieldset>
+
             <label className="field">
-              <span>Nombre de la sala</span>
+              <span>Nombre de la clase</span>
               <input
                 id="roomName"
                 value={roomName}
                 onChange={(event) => setRoomName(event.target.value)}
-                placeholder="Mantenimiento de válvulas"
+                placeholder="Impresión 3D"
                 maxLength={48}
                 autoComplete="off"
               />
             </label>
-            <label className="field">
-              <span>Cuántos estudiantes</span>
-              <input
-                id="students"
-                value={students}
-                onChange={(event) =>
-                  setStudents(event.target.value.replace(/\D/g, "").slice(0, 2))
-                }
-                placeholder="5"
-                inputMode="numeric"
-                autoComplete="off"
-              />
-            </label>
+
+            <div className="field-row">
+              <label className="field">
+                <span>Cuántos estudiantes</span>
+                <input
+                  id="students"
+                  value={students}
+                  onChange={(event) =>
+                    setStudents(event.target.value.replace(/\D/g, "").slice(0, 2))
+                  }
+                  placeholder="5"
+                  inputMode="numeric"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="field">
+                <span>Duración en minutos</span>
+                <input
+                  id="minutos"
+                  value={minutos}
+                  onChange={(event) =>
+                    setMinutos(event.target.value.replace(/\D/g, "").slice(0, 3))
+                  }
+                  placeholder="120"
+                  inputMode="numeric"
+                  autoComplete="off"
+                />
+              </label>
+            </div>
+
             <p className="hint">
-              De aquí salen los puestos: se reparten en arco frente a la mesa, y el
-              salón no admite a nadie más. Van de 1 a {MAX_STUDENTS}. Medido de verdad
-              hay hasta seis; por encima de eso todavía no sabemos si aguanta los 30 fps
-              en celular.
+              El número de estudiantes reparte los puestos en arco frente a la mesa y fija
+              el cupo: va de 1 a {MAX_STUDENTS}. La duración se muestra en el lobby, junto
+              al tiempo que lleva la clase abierta.
             </p>
+
             <button
               className="primary"
               type="button"
               onClick={handleCreate}
               disabled={creating || code.trim().length < 4 || roomName.trim().length < 2}
             >
-              {creating ? "Creando..." : "Crear salón"}
+              {creating ? "Abriendo..." : "Abrir la clase"}
             </button>
             {createError && <p className="error">{createError}</p>}
           </>
         )}
 
-        {(tab === "student" || salon) && (
+        {(tab === "student" || created) && (
           <>
-            <label className="field">
-              <span>Tu nombre</span>
-              <input
-                id="alias"
-                value={alias}
-                onChange={(event) => setAlias(event.target.value)}
-                placeholder="Como quieres que te vean"
-                maxLength={32}
-                autoComplete="off"
-              />
-            </label>
-
             <fieldset className="choice">
               <legend>Cómo controlas</legend>
               <button
@@ -281,24 +346,28 @@ export function JoinScreen({
 
             {mode === "camera" && (
               <p className="hint">
-                Apoya el teléfono en un soporte y deja las manos libres frente a la
-                cámara, a unos 50 cm. Necesitas luz de frente, no a contraluz.
+                Apoya el teléfono en un soporte, en horizontal, y deja las manos libres
+                frente a la cámara, a unos 50 cm. Necesitas luz de frente, no a contraluz.
               </p>
             )}
 
-            <button className="primary" type="submit" disabled={!canSubmit}>
+            <button
+              className="primary"
+              type="submit"
+              disabled={tab === "student" ? !studentReady : !teacherReady}
+            >
               {busy
                 ? status || "Entrando..."
-                : isTeacher
-                  ? "Entrar a armar el salón"
-                  : "Entrar al salón"}
+                : tab === "student"
+                  ? "Entrar a la experiencia"
+                  : "Entrar a armar el salón"}
             </button>
 
             {error && <p className="error">{error}</p>}
 
-            {isTeacher && (
+            {tab === "teacher" && created && (
               <button className="ghost small" type="button" onClick={discard}>
-                Crear otro salón
+                Abrir otra clase
               </button>
             )}
           </>
@@ -306,4 +375,16 @@ export function JoinScreen({
       </form>
     </div>
   );
+}
+
+export function formatMinutes(total: number) {
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  if (hours === 0) return `${minutes} min`;
+  if (minutes === 0) return `${hours} h`;
+  return `${hours} h ${minutes} min`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return value < min ? min : value > max ? max : value;
 }

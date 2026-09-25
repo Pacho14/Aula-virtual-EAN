@@ -17,17 +17,17 @@ export function WhiteRoom({
   halfSize,
   spots,
   mySpotId,
-  /** La zona donde el imán deja apoyar las piezas. */
+  /** La zona donde el imán deja apoyar las piezas. El lobby no tiene. */
   placement,
-  showPlacement,
+  showPlacement = false,
   /** Sin entorno 360 la luz la ponen estas lámparas; con él, sobran. */
   lit,
 }: {
   halfSize: number;
   spots: SceneSpot[];
   mySpotId: string;
-  placement: { center: [number, number]; half: [number, number] };
-  showPlacement: boolean;
+  placement?: { center: [number, number]; half: [number, number] };
+  showPlacement?: boolean;
   lit: boolean;
 }) {
   // La rejilla es cuadrada y el suelo redondo: a lo ancho completo, sus
@@ -84,7 +84,7 @@ export function WhiteRoom({
         esta marca, el profesor descubre el límite soltando una pieza y viendo
         que vuelve sola, que parece un fallo y no una regla.
       */}
-      {showPlacement && (
+      {showPlacement && placement && (
         <mesh
           position={[placement.center[0], 0.006, placement.center[1]]}
           rotation={[-Math.PI / 2, 0, 0]}

@@ -2,8 +2,9 @@
  * MediaPipe dentro de un Web Worker (seccion 10: "separado del hilo de render").
  *
  * El worker recibe un ImageBitmap por cuadro, corre la deteccion, clasifica el
- * gesto y suaviza el puntero. Al hilo principal solo salen unos pocos numeros
- * por mano, nunca los 21 puntos ni el video.
+ * gesto y suaviza el puntero. Al hilo principal salen el resultado y los 21
+ * puntos de cada mano -63 numeros-, nunca el video: el ImageBitmap se cierra
+ * aqui mismo en cuanto se procesa.
  */
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { classify, GestureStabilizer, type Landmark } from "./gestures";
@@ -27,12 +28,16 @@ export interface WorkerHand {
   span: number;
   gesture: Gesture;
   pinch: number;
+  /** Los 21 puntos en crudo de MediaPipe: x, y, z por punto. */
+  landmarks: Float32Array;
 }
 
 type OutMessage =
   | { type: "ready"; delegate: "GPU" | "CPU" }
   | { type: "error"; message: string; fatal: boolean }
   | { type: "hands"; hands: WorkerHand[]; timestamp: number };
+
+declare function postMessage(message: OutMessage, transfer?: Transferable[]): void;
 
 let landmarker: HandLandmarker | null = null;
 let busy = false;
@@ -93,11 +98,13 @@ self.onmessage = async (event) => {
     busy = true;
     try {
       const result = landmarker.detectForVideo(bitmap, data.timestamp);
-      self.postMessage({
-        type: "hands",
-        hands: toHands(result, data.timestamp),
-        timestamp: data.timestamp,
-      });
+      const hands = toHands(result, data.timestamp);
+      // Los puntos viajan transferidos, no copiados: son 63 flotantes por mano
+      // y hasta 24 veces por segundo.
+      postMessage(
+        { type: "hands", hands, timestamp: data.timestamp },
+        hands.map((hand) => hand.landmarks.buffer),
+      );
     } catch (error) {
       self.postMessage({
         type: "error",
@@ -137,6 +144,14 @@ function toHands(
       stabilizers[handedness].reset();
     }
 
+    const flat = new Float32Array(21 * 3);
+    for (let p = 0; p < 21; p++) {
+      const point = landmarks[p]!;
+      flat[p * 3] = point.x;
+      flat[p * 3 + 1] = point.y;
+      flat[p * 3 + 2] = point.z;
+    }
+
     hands.push({
       handedness,
       px: filter.x.filter(c.px, timestamp),
@@ -144,6 +159,7 @@ function toHands(
       span: filter.span.filter(c.span, timestamp),
       gesture: stabilizers[handedness].push(c.gesture),
       pinch: c.pinch,
+      landmarks: flat,
     });
   }
 

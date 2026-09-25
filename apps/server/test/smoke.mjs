@@ -41,12 +41,22 @@ const check = (pasa, label, extra = "") => {
 console.log("Creacion");
 const session = await ok("/api/sessions", {
   code: CODE,
+  salon: 2,
   roomName: "Mantenimiento de valvulas",
   students: 4,
+  minutos: 90,
 });
-console.log("  PIN generado:", session.pin);
+console.log("  codigo generado:", session.pin);
 check(session.roomName === "Mantenimiento de valvulas", "guarda el nombre", session.roomName);
 check(session.students === 4, "guarda cuantos estudiantes", String(session.students));
+check(session.salon === 2, "guarda en que salon", String(session.salon));
+check(session.minutos === 90, "guarda cuanto dura", String(session.minutos));
+
+const repetido = await post("/api/sessions", { code: CODE, salon: 2, roomName: "Otra" });
+check(repetido.status === 409, "un salon no admite dos clases a la vez", `HTTP ${repetido.status}`);
+
+const sinSalon = await post("/api/sessions", { code: CODE, roomName: "Sin salon" });
+check(sinSalon.status === 400, "hay que decir en que salon se abre", `HTTP ${sinSalon.status}`);
 
 // --- mientras se arma, nadie entra --------------------------------------
 console.log("\nFase de edicion");
@@ -60,6 +70,7 @@ const profe = await ok("/api/join", {
   hostToken: session.hostToken,
 });
 check(profe.role === "teacher", "el profesor si entra", profe.role);
+check(profe.salon === 2, "y sabe en que salon esta", String(profe.salon));
 
 const scene = profe.scene;
 check(scene.spots.length === 5, "cuatro puestos de alumno mas el del profesor", `${scene.spots.length}`);
@@ -76,24 +87,39 @@ check(salaProfe.state.roomName === "Mantenimiento de valvulas", "el nombre llega
 check(salaProfe.state.pin === session.pin, "el salon lleva su PIN en el estado", salaProfe.state.pin);
 
 // --- entorno 360 --------------------------------------------------------
+console.log("\nLobby");
+const lobbyArmando = await fetch(API + "/api/lobby").then((r) => r.json());
+const dos = lobbyArmando.salones.find((s) => s.salon === 2);
+check(dos?.estado === "preparando", "el salon 2 aparece preparandose", dos?.estado);
+check(dos?.clase === "Mantenimiento de valvulas", "con el nombre de la clase", dos?.clase);
+check(dos?.minutos === 90, "y con su duracion", String(dos?.minutos));
+check(
+  !JSON.stringify(lobbyArmando).includes(session.pin),
+  "el lobby no reparte el codigo de nadie",
+);
+const uno = lobbyArmando.salones.find((s) => s.salon === 1);
+check(uno?.estado === "libre", "un salon sin clase sale libre", uno?.estado);
+
 console.log("\nEntorno");
 const catalogo = await fetch(API + "/api/environments").then((r) => r.json());
 console.log("  entornos disponibles:", catalogo.map((e) => e.id).join(", ") || "ninguno");
 
 if (catalogo.length > 0) {
-  salaProfe.send("env", { id: catalogo[0].id, yaw: 0.4, pitch: -0.2, height: 0.3 });
+  salaProfe.send("env", { id: catalogo[0].id, x: 0.5, y: 0.3, z: -0.2, rot: 1.2, scale: 1.4 });
   await sleep(300);
   check(salaProfe.state.envId === catalogo[0].id, "el entorno elegido queda en el estado", salaProfe.state.envId);
-  check(Math.abs(salaProfe.state.envYaw - 0.4) < 0.01, "el giro horizontal viaja", salaProfe.state.envYaw.toFixed(3));
-  check(Math.abs(salaProfe.state.envHeight - 0.3) < 0.01, "la altura viaja", salaProfe.state.envHeight.toFixed(3));
+  check(Math.abs(salaProfe.state.envY - 0.3) < 0.01, "la altura viaja", salaProfe.state.envY.toFixed(3));
+  check(Math.abs(salaProfe.state.envRot - 1.2) < 0.01, "la rotacion viaja", salaProfe.state.envRot.toFixed(3));
+  check(Math.abs(salaProfe.state.envScale - 1.4) < 0.01, "la escala viaja", salaProfe.state.envScale.toFixed(3));
 
   salaProfe.send("env", { id: "../../etc/passwd" });
   await sleep(250);
   check(salaProfe.state.envId === catalogo[0].id, "un entorno inventado se ignora", salaProfe.state.envId);
 
-  salaProfe.send("env", { yaw: 99 });
+  salaProfe.send("env", { scale: 99, x: 99 });
   await sleep(250);
-  check(salaProfe.state.envYaw <= Math.PI / 2 + 0.01, "el giro se recorta a 90 grados", salaProfe.state.envYaw.toFixed(3));
+  check(salaProfe.state.envScale <= 4.01, "la escala se recorta", salaProfe.state.envScale.toFixed(2));
+  check(salaProfe.state.envX <= 8.01, "la posicion se recorta", salaProfe.state.envX.toFixed(2));
 }
 
 // --- sacar piezas del panel de objetos ----------------------------------
@@ -173,7 +199,14 @@ salaProfe.send("publish");
 await sleep(400);
 check(salaProfe.state.phase === "live", "la sala pasa a en vivo", salaProfe.state.phase);
 
-const alumno = await ok("/api/join", { pin: session.pin, alias: "Estudiante" });
+const otroSalon = await post("/api/join", {
+  pin: session.pin,
+  alias: "Estudiante",
+  salon: 3,
+});
+check(otroSalon.status === 404, "el codigo no sirve en el portal equivocado", `HTTP ${otroSalon.status}`);
+
+const alumno = await ok("/api/join", { pin: session.pin, alias: "Estudiante", salon: 2 });
 check(alumno.role === "student", "ahora si entra un estudiante", alumno.role);
 
 const clienteAlumno = new Client(API);
@@ -197,7 +230,7 @@ await sleep(250);
 check(salaAlumno.state.objects.has(creada), "ni borra las que hay");
 
 const envAntes = salaAlumno.state.envId;
-salaAlumno.send("env", { id: "", yaw: 1 });
+salaAlumno.send("env", { id: "", rot: 1 });
 await sleep(250);
 check(salaAlumno.state.envId === envAntes, "ni cambia el entorno", salaAlumno.state.envId);
 
@@ -207,6 +240,11 @@ await sleep(300);
 check(salaProfe.state.objects.size === antes, "ni el profesor, con la clase ya abierta");
 
 // --- pose ---------------------------------------------------------------
+const lobbyVivo = await fetch(API + "/api/lobby").then((r) => r.json());
+const enCurso = lobbyVivo.salones.find((s) => s.salon === 2);
+check(enCurso?.estado === "en-curso", "el salon 2 pasa a clase en curso", enCurso?.estado);
+check(enCurso?.transcurridos !== null, "y empieza a contar el tiempo", String(enCurso?.transcurridos));
+
 console.log("\nPose y objetos");
 salaProfe.send("pose", [-0.1, 1.62, -0.6, 0.2, -0.05, 1, 3, 0.4, 1.1, -1.2, 1, 1, -0.3, 1.0, -1.0]);
 await sleep(300);
@@ -243,6 +281,29 @@ try {
   check(true, "ticket de un solo uso: reuso rechazado");
 }
 
-await salaProfe.leave();
+// --- cerrar la clase libera el salon ------------------------------------
+console.log("\nCerrar");
+salaProfe.send("close");
+await sleep(1200);
+const lobbyFinal = await fetch(API + "/api/lobby").then((r) => r.json());
+const cerrado = lobbyFinal.salones.find((s) => s.salon === 2);
+check(cerrado?.estado === "libre", "el salon queda libre para la clase siguiente", cerrado?.estado);
+
+const despues = await post("/api/sessions", { code: CODE, salon: 2, roomName: "La siguiente" });
+check(despues.status === 200, "y otro profesor ya puede abrir ahi", `HTTP ${despues.status}`);
+if (despues.status === 200) {
+  // Y se cierra tambien: esta prueba no deja salones ocupados detras.
+  const limpieza = await ok("/api/join", {
+    pin: despues.body.pin,
+    alias: "Profe",
+    hostToken: despues.body.hostToken,
+  });
+  const cliente = new Client(API);
+  const sala = await cliente.joinById(limpieza.roomId, { ticket: limpieza.ticket });
+  await sleep(300);
+  sala.send("close");
+  await sleep(600);
+}
+
 console.log(fallos === 0 ? "\nTodo pasa." : `\n${fallos} comprobacion(es) fallaron.`);
 process.exit(fallos === 0 ? 0 : 1);

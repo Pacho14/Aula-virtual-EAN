@@ -5,6 +5,7 @@ export function Hud({
   snapshot,
   pin,
   roomName,
+  salon,
   editing,
   participants,
   capacity,
@@ -12,10 +13,13 @@ export function Hud({
   voiceOn,
   onToggleMic,
   onLeave,
+  onClose,
 }: {
   snapshot: HudSnapshot;
   pin: string;
   roomName: string;
+  /** En cuál de los tres salones del lobby está la clase. */
+  salon: number;
   /** El profesor armando la escena, antes de abrir el salón. */
   editing: boolean;
   participants: number;
@@ -24,6 +28,8 @@ export function Hud({
   voiceOn: boolean;
   onToggleMic: () => void;
   onLeave: () => void;
+  /** Solo el profesor: cierra el salón y lo deja libre para la clase siguiente. */
+  onClose: (() => void) | null;
 }) {
   const gesture = snapshot.gesture as Gesture;
 
@@ -31,10 +37,10 @@ export function Hud({
     <>
       <div className="hud-top">
         <span className="chip">
-          {roomName || "Salón"}
+          Salón {salon} · {roomName || "Clase"}
         </span>
         <span className="chip">
-          PIN <b>{pin || "—"}</b>
+          Código <b>{pin || "—"}</b>
         </span>
         {editing ? (
           <span className="chip editing">Armando el salón · nadie ha entrado</span>
@@ -68,6 +74,11 @@ export function Hud({
           <span className="chip mono" title="Render / detección de manos">
             {snapshot.renderFps} fps · {snapshot.source === "camera" ? `${snapshot.detectFps} det` : "mouse"}
           </span>
+          {onClose && (
+            <button className="icon danger" onClick={onClose} title="Deja el salón libre">
+              Cerrar la clase
+            </button>
+          )}
           <button className="icon" onClick={onLeave}>
             Salir
           </button>

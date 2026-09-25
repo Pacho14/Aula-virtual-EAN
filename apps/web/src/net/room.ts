@@ -59,9 +59,12 @@ export interface AulaStateView {
   students: number;
   /** Entorno 360 elegido. "" es la habitación en blanco. */
   envId: string;
-  envYaw: number;
-  envPitch: number;
-  envHeight: number;
+  /** Cómo quedó colocada la esfera del entorno. */
+  envX: number;
+  envY: number;
+  envZ: number;
+  envRot: number;
+  envScale: number;
   environment: string;
   halfSize: number;
   players: Map<string, PlayerView>;

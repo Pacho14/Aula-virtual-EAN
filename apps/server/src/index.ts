@@ -14,7 +14,15 @@ import { AccessToken } from "livekit-server-sdk";
 import { AulaRoom } from "./AulaRoom";
 import { listEnvironments } from "./environments";
 import { clampStudents, makeScene } from "./scene";
-import { createSession, findSession, issueTicket, listSessions, reservePin } from "./tickets";
+import { describeSalon, isSalonId, SALONES, type SalonId } from "./salones";
+import {
+  createSession,
+  findSession,
+  findSessionBySalon,
+  issueTicket,
+  listSessions,
+  reservePin,
+} from "./tickets";
 
 const PORT = Number(process.env.PORT ?? 2567);
 const DEV_ORIGIN = process.env.DEV_ORIGIN ?? "http://localhost:5173";
@@ -123,6 +131,56 @@ app.get("/api/environments", (_req, res) => {
   res.json(listEnvironments());
 });
 
+/**
+ * Cuanto puede durar una clase, en minutos. Lo escribe el profesor y lo lee el
+ * lobby como registro de tiempo.
+ */
+const MAX_MINUTOS = 8 * 60;
+
+function clampMinutos(value: unknown) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return 60;
+  return Math.min(MAX_MINUTOS, Math.max(5, n));
+}
+
+/**
+ * Como esta cada uno de los tres salones, para el lobby del estudiante.
+ *
+ * Lo consulta una pantalla que no tiene codigo todavia, asi que aqui no sale
+ * ningun PIN: solo que clase hay, cuanto lleva y si se puede entrar.
+ */
+async function estadoDeLosSalones() {
+  const vivas = await matchMaker.query({});
+  const porRoomId = new Map(vivas.map((room) => [room.roomId, room]));
+
+  return SALONES.map((salon) => {
+    const session = findSessionBySalon(salon);
+    const room = session ? porRoomId.get(session.roomId) : undefined;
+    if (!session || !room) return describeSalon(salon, null);
+
+    const phase = ((room.metadata as { phase?: string } | undefined)?.phase ?? "live") as
+      | "editing"
+      | "live";
+    return describeSalon(salon, {
+      clase: session.scene.roomName,
+      minutos: session.minutos,
+      phase,
+      liveAt: session.liveAt,
+      participantes: room.clients,
+      capacidad: session.scene.capacity,
+    });
+  });
+}
+
+app.get("/api/lobby", async (_req, res) => {
+  try {
+    res.json({ salones: await estadoDeLosSalones() });
+  } catch (error) {
+    console.error("[api] no se pudo leer el estado de los salones:", error);
+    res.status(500).json({ error: "No se pudo leer el estado de los salones." });
+  }
+});
+
 /** Solo el profesor publica salones, y para eso necesita el codigo. */
 app.post("/api/sessions", async (req, res) => {
   const ip = req.ip ?? "desconocida";
@@ -137,21 +195,44 @@ app.post("/api/sessions", async (req, res) => {
     return;
   }
 
+  const salon = req.body?.salon;
+  if (!isSalonId(salon)) {
+    res.status(400).json({ error: "Elige en qué salón abres la clase: 1, 2 o 3." });
+    return;
+  }
+
+  // Un salón admite una clase a la vez. Sin esta regla, dos profesores abren
+  // en el mismo portal y el estudiante no tiene forma de saber a cuál entra.
+  const ocupado = findSessionBySalon(salon);
+  if (ocupado) {
+    const vivas = await matchMaker.query({ roomId: ocupado.roomId });
+    if (vivas.length > 0) {
+      res.status(409).json({
+        error: `El salón ${salon} ya tiene una clase abierta: ${ocupado.scene.roomName}.`,
+      });
+      return;
+    }
+  }
+
   try {
     // El salon ya no es siempre el mismo: el nombre y cuanta gente cabe son
     // lo primero que el profesor decide, y de ahi salen los puestos.
     const scene = makeScene({
       roomName: String(req.body?.roomName ?? ""),
       students: clampStudents(req.body?.students),
+      salon,
     });
+    const minutos = clampMinutos(req.body?.minutos);
     // El PIN se aparta antes de crear la sala: el salon lo lleva en su estado
     // porque la vista previa del profesor lo muestra dentro de la escena.
     const pin = reservePin();
     const room = await matchMaker.createRoom("aula", { scene, pin });
-    const session = createSession(pin, room.roomId, scene);
+    const session = createSession(pin, room.roomId, scene, salon, minutos);
     res.json({
       pin: session.pin,
       roomId: room.roomId,
+      salon,
+      minutos,
       roomName: scene.roomName,
       students: scene.students,
       // Esta es la credencial que convierte a quien la tenga en el profesor
@@ -184,9 +265,13 @@ app.post("/api/join", async (req, res) => {
   const pin = String(req.body?.pin ?? "").trim();
   const alias = String(req.body?.alias ?? "").trim().slice(0, 32);
   const hostToken = String(req.body?.hostToken ?? "");
+  // Desde el lobby, el estudiante toca un portal y escribe el código de ESE
+  // salón. Sin este dato el código valdría para cualquiera de los tres, y
+  // tocar un portal dejaría de significar nada.
+  const salon: SalonId | null = isSalonId(req.body?.salon) ? req.body.salon : null;
 
   if (!/^\d{6}$/.test(pin)) {
-    res.status(400).json({ error: "El PIN son seis digitos." });
+    res.status(400).json({ error: "El código son seis dígitos." });
     return;
   }
   if (alias.length < 2) {
@@ -198,7 +283,7 @@ app.post("/api/join", async (req, res) => {
   if (!session) {
     // Este si es un intento fallido de adivinar un PIN.
     countFailure(ip);
-    res.status(404).json({ error: "Ese PIN no corresponde a ningún salón activo." });
+    res.status(404).json({ error: "Ese código no corresponde a ninguna clase abierta." });
     return;
   }
 
@@ -206,7 +291,13 @@ app.post("/api/join", async (req, res) => {
   // dejar que el cliente falle al conectarse con un "room not found".
   const alive = await matchMaker.query({ roomId: session.roomId });
   if (alive.length === 0) {
-    res.status(410).json({ error: "Ese salón ya se cerró. Pide un PIN nuevo." });
+    res.status(410).json({ error: "Esa clase ya se cerró. Pide un código nuevo." });
+    return;
+  }
+
+  if (salon !== null && session.salon !== salon) {
+    countFailure(ip);
+    res.status(404).json({ error: `Ese código no es del salón ${salon}.` });
     return;
   }
 
@@ -235,6 +326,7 @@ app.post("/api/join", async (req, res) => {
     voiceId,
     alias,
     role,
+    salon: session.salon,
     scene: session.scene,
     voice: voiceEnabled
       ? {

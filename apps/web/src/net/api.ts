@@ -64,6 +64,8 @@ export interface Scene {
   mode: "sync" | "async";
   /** Cupo total: los estudiantes más el profesor. */
   capacity: number;
+  /** En cuál de los tres salones del lobby se abrió la clase. */
+  salon: number;
   roomName: string;
   students: number;
   bounds: { halfSize: number; height: number };
@@ -72,6 +74,46 @@ export interface Scene {
   placement: PlacementZone;
   assets: SceneAsset[];
   spots: SceneSpot[];
+}
+
+/**
+ * Estado de uno de los tres salones, tal como lo ve el lobby.
+ *
+ * Aquí no viaja ningún código: esta pantalla la ve alguien que todavía no
+ * tiene ninguno, y repartirlo desde el lobby haría inútil el código entero.
+ */
+export type EstadoSalon = "libre" | "preparando" | "disponible" | "en-curso" | "llena";
+
+export interface SalonView {
+  salon: number;
+  estado: EstadoSalon;
+  clase: string;
+  minutos: number;
+  /** Minutos que lleva la clase abierta, o null si todavía no empieza. */
+  transcurridos: number | null;
+  participantes: number;
+  capacidad: number;
+}
+
+/** Lo que se lee en el portal. Un estado por rótulo, sin abreviar. */
+export const ESTADO_TEXTO: Record<EstadoSalon, string> = {
+  libre: "Sala no disponible",
+  preparando: "Profesor preparando la sala",
+  disponible: "Sala disponible",
+  "en-curso": "Clase en curso",
+  llena: "Sala llena",
+};
+
+export function admiteEstudiantes(estado: EstadoSalon) {
+  return estado === "disponible" || estado === "en-curso";
+}
+
+/** Los tres salones y su estado. El lobby lo refresca solo. */
+export async function fetchLobby(): Promise<SalonView[]> {
+  const response = await fetch(`${API_BASE}/api/lobby`);
+  if (!response.ok) throw new Error("No se pudo leer el estado de los salones.");
+  const payload = (await response.json()) as { salones: SalonView[] };
+  return payload.salones;
 }
 
 /** Un entorno 360 del carrusel, tal como lo publica /api/environments. */
@@ -106,6 +148,7 @@ export interface JoinResult {
   voiceId: string;
   alias: string;
   role: "teacher" | "student";
+  salon: number;
   scene: Scene;
   voice: { url: string; token: string } | null;
 }
@@ -146,6 +189,8 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 export interface CreatedSession {
   pin: string;
   roomId: string;
+  salon: number;
+  minutos: number;
   roomName: string;
   students: number;
   /** Credencial de profesor de ese salón. Guárdala: no se puede recuperar. */
@@ -154,8 +199,14 @@ export interface CreatedSession {
 }
 
 /** Solo el profesor: exige el código que imprime el servidor al arrancar. */
-export function createSession(code: string, roomName: string, students: number) {
-  return post<CreatedSession>("/api/sessions", { code, roomName, students });
+export function createSession(options: {
+  code: string;
+  roomName: string;
+  students: number;
+  salon: number;
+  minutos: number;
+}) {
+  return post<CreatedSession>("/api/sessions", options);
 }
 
 /** El catálogo del carrusel. Solo miniaturas; las HDRI bajan al elegirlas. */
@@ -174,6 +225,12 @@ export function assetUrl(path: string) {
  * El rol lo decide el servidor. Con hostToken entras como profesor; sin él,
  * como estudiante. No hay forma de pedirlo desde aquí.
  */
-export function joinSession(pin: string, alias: string, hostToken?: string) {
-  return post<JoinResult>("/api/join", { pin, alias, hostToken });
+export function joinSession(options: {
+  pin: string;
+  alias: string;
+  hostToken?: string;
+  /** Desde el lobby: el código tiene que ser el de ese salón, no el de otro. */
+  salon?: number;
+}) {
+  return post<JoinResult>("/api/join", options);
 }

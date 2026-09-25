@@ -68,7 +68,9 @@ export interface Scene {
   mode: "sync" | "async";
   /** Cupo total de la sala: los estudiantes mas el profesor. */
   capacity: number;
-  /** Lo que escribio el profesor al crear el salon. */
+  /** En cual de los tres salones del lobby se abrio la clase. */
+  salon: number;
+  /** Lo que escribio el profesor al crear el salon: el nombre de la clase. */
   roomName: string;
   students: number;
   /** Mitad del ancho de la sala, en metros. Acota el movimiento de objetos. */
@@ -139,7 +141,9 @@ const PLACEMENT: PlacementZone = {
  * dijo el profesor, y el profesor queda al otro lado mirandolos: cada quien
  * tiene el material al frente y al grupo enfrente, como en un taller.
  */
-export function makeScene(options: { roomName?: string; students?: number } = {}): Scene {
+export function makeScene(
+  options: { roomName?: string; students?: number; salon?: number } = {},
+): Scene {
   const students = clampStudents(options.students);
   const spots = makeSpots(students);
 
@@ -148,7 +152,8 @@ export function makeScene(options: { roomName?: string; students?: number } = {}
     environment: "white-room",
     mode: "sync",
     capacity: students + 1,
-    roomName: (options.roomName ?? "").trim().slice(0, 48) || "Salón sin nombre",
+    salon: options.salon ?? 1,
+    roomName: (options.roomName ?? "").trim().slice(0, 48) || "Clase sin nombre",
     students,
     bounds: { halfSize: 4, height: 3 },
     focus: [0, 1.1, 0],

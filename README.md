@@ -1,9 +1,10 @@
 # Aula EAN Visual
 
-Plataforma académica multijugador en WebXR. El profesor arma el salón con las
-manos —entorno 360, mesa, piezas— y después reparte un PIN; los estudiantes
-entran desde una URL, ven la misma escena y la manipulan con las manos por
-cámara, con voz espacial.
+Plataforma académica multijugador en WebXR. Hay tres salones. El profesor abre
+una clase en uno, lo arma con las manos —entorno 360, mesa, piezas— y reparte un
+código; los estudiantes entran desde una URL a un lobby con tres portales, ven
+en cuál hay clase, escriben el código y entran. Todo con las manos por cámara y
+voz espacial.
 
 Web-first sobre TypeScript. Un mismo código sirve a PC y celular desde una URL.
 El Quest 3 (WebXR Hand Input) entra en la fase 2; la capa de entrada ya está
@@ -19,15 +20,20 @@ npm run dev
 
 Abre <http://localhost:5173>:
 
-1. **Soy profesor** → el código que imprimió el servidor al arrancar, el nombre
-   de la sala y cuántos estudiantes esperas → **Crear salón**. Aparece el PIN.
+1. **Soy profesor** → el código que imprimió el servidor al arrancar, en qué
+   salón abres, el nombre de la clase, cuántos estudiantes y cuánto dura →
+   **Abrir la clase**. Aparece el código de la sala.
 2. Entra a **armar el salón**: estás solo, con la mesa y los paneles del editor.
-   Elige un entorno 360, saca piezas y ponlas sobre la mesa.
-3. **Revisar y comenzar**. Hasta ese momento el PIN no deja entrar a nadie.
-4. En otra pestaña, **Soy estudiante** → ese PIN → otro nombre → entrar.
+   Elige un entorno 360, colócalo, saca piezas y ponlas sobre la mesa.
+3. **Revisar y comenzar**. Hasta ese momento el código no deja entrar a nadie.
+4. En otra pestaña, **Soy estudiante** → correo y nombre → **Entrar a la
+   experiencia**. Caes en el lobby, apuntas al portal de ese salón, escribes el
+   código en el teclado y entras.
+5. Al terminar, **Cerrar la clase** deja el salón libre para el siguiente.
 
-Quien llegue antes de que abras no ve un error: su pantalla dice que estás
-preparando el salón y entra sola en cuanto pulsas comenzar.
+Los dos caminos están separados a propósito: el estudiante no ve nada de crear
+salones, y no necesita ningún código para entrar a la experiencia. El código
+hace falta en el portal, no en la puerta de la calle.
 
 ### Quién puede crear salones
 
@@ -150,6 +156,54 @@ Con seguimiento por cámara la profundidad es lo más impreciso que hay. Por eso
 la pieza no va a una distancia deducida del tamaño de la palma, sino a donde el
 rayo corta el tablero: se apunta a la mesa y la pieza cae ahí.
 
+### Los tres salones y el lobby
+
+Los salones son tres sitios fijos, como tres aulas de un pasillo, y cada uno
+admite una clase a la vez. Eso es lo que hace que los portales del lobby tengan
+a qué apuntar antes de que nadie tenga un código.
+
+| Estado | Qué significa | ¿Se puede entrar? |
+|---|---|---|
+| Sala no disponible | Nadie ha abierto nada ahí | No |
+| Profesor preparando la sala | La clase existe pero se está armando | No |
+| Sala disponible | Abierta y todavía sin nadie | Sí |
+| Clase en curso | Abierta y con estudiantes dentro | Sí |
+| Sala llena | Sin cupo | No |
+
+`GET /api/lobby` devuelve los tres estados, y el lobby lo pide cada cuatro
+segundos: cuando un profesor abre una clase, su portal y su fila de la tabla
+cambian solos. **El lobby nunca devuelve el código de nadie**: lo lee una
+pantalla que todavía no tiene ninguno, y repartirlo ahí haría inútil pedirlo.
+
+La tabla no tiene horario cargado de antemano. Solo se ve lo que existe: la
+clase abierta, cuánto dijo el profesor que iba a durar y cuánto lleva. Un
+horario escrito a mano que contradiga lo que de verdad está abierto es peor que
+no tener horario.
+
+Cerrar la clase no es un adorno: con tres salones, quien termina a las diez
+dejaría el salón ocupado 45 minutos y el siguiente profesor no podría abrir.
+
+### La cámara: fija, y solo mira
+
+La cámara no se desplaza. Ni caminar, ni acercarse, ni moverse en X o en Z: se
+queda en el puesto y lo único que cambia es hacia dónde mira, 180 grados en
+horizontal y un recorrido más corto en vertical.
+
+Y quien la mueve es el deslizador, nunca la mano directamente:
+
+```
+MediaPipe → puntos de la mano → pellizco → deslizador → giro de la cámara
+```
+
+Esa cadena importa. Una cámara pegada a la posición de la mano se mueve cada vez
+que la mano tiembla y no hay forma de dejarla quieta; un deslizador se queda
+donde lo sueltas. Los dos deslizadores están en pantalla durante toda la
+experiencia —lobby y clase, estudiante y profesor— y se pueden ocultar sin que
+la cámara deje de funcionar.
+
+El arrastre con mouse sigue existiendo y escribe en el mismo valor: arrastrar
+mueve el deslizador, y mover el deslizador mueve la vista.
+
 ### La capa de entrada
 
 Todo dispositivo produce las mismas acciones; nada aguas abajo sabe de dónde
@@ -161,10 +215,16 @@ WebXR (fase 2)      ├──▶ capa de entrada ──▶ apuntar · selecciona
 Mouse / toque       ┘                        soltar · levantar la mano
 ```
 
-MediaPipe corre en un **Web Worker** separado del render. Los 21 puntos por mano
-nunca cruzan al hilo principal: el worker clasifica el gesto, suaviza el puntero
-con un filtro One Euro y devuelve unos pocos números. El video no sale del
-dispositivo.
+MediaPipe corre en un **Web Worker** separado del render: clasifica el gesto,
+suaviza el puntero con un filtro One Euro y devuelve el resultado junto con los
+**21 puntos de cada mano**, en el orden y con los nombres de MediaPipe, sin
+renumerar. Son 63 números por mano; el vídeo no sale del dispositivo ni del
+hilo del worker.
+
+Los puntos se pueden ver en pantalla con **Mostrar puntos de la mano**, en los
+controles de cámara. No es un adorno: sirve para ver por qué el detector no
+encuentra una mano —mala luz, contraluz, la mano fuera de cuadro— y para
+comprobar que izquierda y derecha son las que uno cree.
 
 | Gesto | Acción |
 |---|---|
@@ -179,6 +239,12 @@ Abrir la mano suelta lo que se agarró cerrando el puño. Una pieza recién saca
 del panel llega a una mano que nunca se cerró, así que para esa el gesto es el
 pellizco: si bastara con abrir, se caería en el aire en el mismo instante de
 aparecer.
+
+Pellizcar pulsa siempre, aunque sea el mismo botón que la vez anterior: un
+código con dos dígitos iguales seguidos se escribe pulsando dos veces sin mover
+la mano. La espera sostenida sí lleva guardia —si no, quedarse mirando un botón
+lo dispararía una vez por segundo—, así que para repetir por esa vía hay que
+salir y volver.
 
 ## Infraestructura: el túnel y el audio
 
@@ -296,9 +362,14 @@ Son deliberados, no pendientes olvidados:
   entran en la fase 2; la interfaz de `tickets.ts` no cambia.
 - **Assets primitivos.** Esfera, cilindro y cubo. Poner un GLB es cambiar el
   campo `src` en `scene.ts`, sin tocar código; subirlos desde la interfaz es
-  fase 2.
+  fase 3.
 - **La escena no se guarda.** El profesor arma el salón cada vez. Persistir
-  escenas es fase 2, junto con Supabase.
+  escenas es fase 3, junto con Supabase.
+- **El correo del estudiante no se verifica.** Se comprueba la forma y nada más.
+  Sin autenticación real es un dato declarado: filtrar por dominio daría una
+  sensación de control que no existe. La autenticación entra con Supabase.
+- **El lobby es de una sola persona.** No hay avatares de otros estudiantes
+  entre los portales: no hay nada que sincronizar ahí todavía.
 - **Sin seguimiento de cabeza.** La cámara vive en el punto asignado y la cabeza
   del avatar se inclina hacia donde apunta la mano. Suficiente para validar
   gestos; un rastreador de rostro costaría una segunda red neuronal.

@@ -77,11 +77,18 @@ export class MouseSource implements InputSource {
       span: 0.1,
       gesture: this.gesture,
       pinch: this.gesture === "fist" ? 1 : 0,
+      // El mouse no tiene dedos. Nada que dibujar en la vista de puntos.
+      landmarks: null,
     };
     this.frame = { source: "mouse", left: null, right: hand, primary: hand, detectFps: 0 };
   }
 }
 
 function isInterface(target: EventTarget | null) {
-  return target instanceof Element && target.closest("button, input, .hud-top, .hud-bottom");
+  // Arrastrar el deslizador de la camara no puede, ademas, agarrar la pieza
+  // que quedo detras.
+  return (
+    target instanceof Element &&
+    target.closest("button, input, label, .hud-top, .hud-bottom, .camctl")
+  );
 }
