@@ -312,7 +312,7 @@ fallar en silencio.
 |---|---:|---|
 | WASM de MediaPipe | 3,29 MB | 11,21 MB sin comprimir |
 | Modelo `hand_landmarker.task` | 7,46 MB | Desde el CDN de Google |
-| JavaScript de la aplicación | 0,50 MB | 1,76 MB sin comprimir |
+| JavaScript de la aplicación | 0,52 MB | 1,89 MB sin comprimir |
 | Miniaturas del carrusel | 0,19 MB | Las tres juntas |
 | CSS y HTML | 6 kB | |
 | **Total** | **≈ 11,5 MB** | Presupuesto de celular: 15 MB |
