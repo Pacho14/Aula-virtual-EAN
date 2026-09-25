@@ -1,6 +1,16 @@
 import { Room, type Client } from "colyseus";
-import { AulaState, Hand, Player, SceneObject, GESTURE } from "./state";
-import { aimAt, FASE1_SCENE, PLAYER_COLORS, type Scene } from "./scene";
+import { AulaState, ENV_HEIGHT, ENV_ROTATION, Hand, Player, SceneObject, GESTURE } from "./state";
+import {
+  aimAt,
+  isPrimitiveName,
+  makeScene,
+  PLAYER_COLORS,
+  PRIMITIVES,
+  snapToPlacement,
+  type PrimitiveName,
+  type Scene,
+} from "./scene";
+import { isKnownEnvironment } from "./environments";
 import { consumeTicket, removeSessionByRoomId, type Ticket } from "./tickets";
 
 /**
@@ -22,6 +32,15 @@ const POSE_LENGTH = 15;
 /** Minutos que un salon vacio sigue en pie antes de desecharse. */
 const EMPTY_MINUTES_LIMIT = 45;
 
+/**
+ * Cuantas piezas puede sacar el profesor del panel de objetos.
+ *
+ * No es una limitacion tecnica sino de la clase: con mas de una docena de
+ * cosas sobre la mesa ya no se distingue cual es cual, y cada una cuesta su
+ * parte del presupuesto de dibujo en celular.
+ */
+const MAX_SPAWNED = 12;
+
 export class AulaRoom extends Room<{ state: AulaState }> {
   /**
    * El profesor publica el salon y reparte el PIN; los estudiantes llegan
@@ -31,21 +50,31 @@ export class AulaRoom extends Room<{ state: AulaState }> {
    */
   override autoDispose = false;
 
-  private scene: Scene = FASE1_SCENE;
+  private scene: Scene = makeScene();
   /** spotId -> sessionIds ocupandolo. */
   private occupancy = new Map<string, Set<string>>();
   private colorCursor = 0;
   private emptyMinutes = 0;
+  /** Numeracion de las piezas que saca el profesor. No se reutiliza. */
+  private spawnCursor = 0;
 
   override onCreate(options: { pin?: string; scene?: Scene }) {
     if (options.scene) this.scene = options.scene;
 
     this.state = new AulaState();
     this.state.pin = options.pin ?? "";
+    this.state.roomName = this.scene.roomName;
+    this.state.students = this.scene.students;
+    this.state.capacity = this.scene.capacity;
+    this.state.phase = "editing";
     this.state.environment = this.scene.environment;
     this.state.sceneVersion = this.scene.version;
     this.state.halfSize = this.scene.bounds.halfSize;
     this.maxClients = this.scene.capacity;
+
+    // La API consulta esto antes de dejar entrar a un estudiante: mientras el
+    // profesor arma la escena, el salon existe pero todavia no recibe a nadie.
+    this.setMetadata({ phase: "editing", roomName: this.scene.roomName });
 
     // 20 Hz, como fija la seccion 05 del documento.
     this.setPatchRate(50);
@@ -97,6 +126,53 @@ export class AulaRoom extends Room<{ state: AulaState }> {
       if (player) player.speaking = Boolean(message?.v);
     });
 
+    // --- editor de escena: solo el profesor, y solo antes de empezar -------
+
+    this.onMessage("spawn", (client, message: { prim?: unknown }) => {
+      if (!this.canEdit(client.sessionId)) return;
+      if (!isPrimitiveName(message?.prim)) return;
+      const id = this.spawn(message.prim);
+      // Solo a quien la pidio: su cliente la engancha a la mano sin esperar a
+      // buscarla entre los objetos del estado.
+      if (id) client.send("spawned", { id });
+    });
+
+    this.onMessage("remove", (client, message: { id?: string }) => {
+      if (!this.canEdit(client.sessionId)) return;
+      const object = this.state.objects.get(String(message?.id ?? ""));
+      // La mesa no se quita: es el salon, no una pieza de la escena.
+      if (!object || object.locked) return;
+      this.state.objects.delete(String(message!.id));
+    });
+
+    this.onMessage(
+      "env",
+      (client, message: { id?: unknown; yaw?: unknown; pitch?: unknown; height?: unknown }) => {
+        // El entorno si se puede cambiar en vivo: girar el paisaje a media
+        // clase es parte de mostrarlo, no de armarlo.
+        if (!this.isTeacher(client.sessionId)) return;
+
+        if (typeof message?.id === "string" && isKnownEnvironment(message.id)) {
+          this.state.envId = message.id;
+        }
+        if (isNumber(message?.yaw)) {
+          this.state.envYaw = clamp(message.yaw, ENV_ROTATION.min, ENV_ROTATION.max);
+        }
+        if (isNumber(message?.pitch)) {
+          this.state.envPitch = clamp(message.pitch, ENV_ROTATION.min, ENV_ROTATION.max);
+        }
+        if (isNumber(message?.height)) {
+          this.state.envHeight = clamp(message.height, ENV_HEIGHT.min, ENV_HEIGHT.max);
+        }
+      },
+    );
+
+    this.onMessage("publish", (client) => {
+      if (!this.canEdit(client.sessionId)) return;
+      this.state.phase = "live";
+      this.setMetadata({ phase: "live", roomName: this.state.roomName });
+    });
+
     // Como autoDispose esta apagado, la sala se recoge sola cuando lleva un
     // rato sin nadie. Sin esto, cada salon creado quedaria vivo para siempre.
     this.clock.setInterval(() => {
@@ -121,6 +197,12 @@ export class AulaRoom extends Room<{ state: AulaState }> {
     const ticket: Ticket | undefined = consumeTicket(options?.ticket);
     if (!ticket || ticket.roomId !== this.roomId) {
       throw new Error("Ticket invalido o vencido. Vuelve a entrar con el PIN.");
+    }
+
+    // La API ya lo filtra, pero el salon tampoco se fia: mientras el profesor
+    // arma la escena, entrar seria ver una sala a medio hacer.
+    if (this.state.phase === "editing" && ticket.role !== "teacher") {
+      throw new Error("El profesor todavia esta preparando el salon.");
     }
 
     const player = new Player();
@@ -158,6 +240,63 @@ export class AulaRoom extends Room<{ state: AulaState }> {
   }
 
   // --------------------------------------------------------------------
+
+  private isTeacher(sessionId: string) {
+    return this.state.players.get(sessionId)?.role === "teacher";
+  }
+
+  /** Armar la escena es del profesor, y solo antes de que empiece la clase. */
+  private canEdit(sessionId: string) {
+    return this.state.phase === "editing" && this.isTeacher(sessionId);
+  }
+
+  /**
+   * Saca una pieza del panel de objetos y la deja sobre la mesa.
+   *
+   * No aparece siempre en el mismo punto: las piezas se reparten en espiral
+   * desde el centro del tablero, porque apiladas en el mismo sitio la segunda
+   * tapa a la primera y parece que el panel no hizo nada.
+   */
+  private spawn(prim: PrimitiveName): string | null {
+    let spawned = 0;
+    this.state.objects.forEach((object: SceneObject) => {
+      if (!object.locked) spawned += 1;
+    });
+    if (spawned >= MAX_SPAWNED) return null;
+
+    const definition = PRIMITIVES[prim];
+    const object = new SceneObject();
+    object.src = `prim:${prim}`;
+    object.label = definition.label;
+    object.color = definition.color;
+    object.sx = definition.size[0];
+    object.sy = definition.size[1];
+    object.sz = definition.size[2];
+    object.interactive = true;
+    object.locked = false;
+
+    // Angulo aureo: reparte los puntos sin que dos caigan encima del otro.
+    const angle = spawned * 2.399963;
+    const radius = 0.08 + spawned * 0.035;
+    const zone = this.scene.placement;
+    const placed = snapToPlacement(
+      zone,
+      zone.table.center[0] + Math.cos(angle) * radius,
+      zone.table.center[1] + Math.sin(angle) * radius,
+      [object.sx / 2, object.sy / 2, object.sz / 2],
+    );
+    object.x = placed.x;
+    object.y = placed.y;
+    object.z = placed.z;
+    // Sin esto la pieza nace sin angulo, y el cliente recibe un giro que no es
+    // un numero: la matriz del objeto se llena de NaN y la malla deja de pintar
+    // un solo pixel, aunque siga existiendo, en su sitio y en la escena.
+    object.ry = 0;
+
+    const id = `pieza-${++this.spawnCursor}`;
+    this.state.objects.set(id, object);
+    return id;
+  }
 
   private claimSpot(sessionId: string, role: "teacher" | "student") {
     const preferred = role === "teacher" ? "prof" : null;
@@ -222,20 +361,46 @@ export class AulaRoom extends Room<{ state: AulaState }> {
     if (!obj || obj.heldBy !== sessionId) return;
     if (p.some((n) => typeof n !== "number" || !Number.isFinite(n))) return;
 
-    const h = this.scene.bounds.halfSize;
-    obj.x = clamp(p[0]!, -h, h);
-    obj.y = clamp(p[1]!, 0, this.scene.bounds.height);
-    obj.z = clamp(p[2]!, -h, h);
+    // El cliente manda a donde apunta la mano; el servidor decide donde cabe.
+    // La altura que llega ni se mira: la pone la superficie.
+    const placed = snapToPlacement(this.scene.placement, p[0]!, p[2]!, [
+      obj.sx / 2,
+      obj.sy / 2,
+      obj.sz / 2,
+    ]);
+    obj.x = placed.x;
+    obj.y = placed.y;
+    obj.z = placed.z;
     if (typeof p[3] === "number" && Number.isFinite(p[3])) obj.ry = p[3];
   }
 
   private release(sessionId: string, id?: string) {
     if (!id) return;
     const obj = this.state.objects.get(id);
-    if (obj && obj.heldBy === sessionId) obj.heldBy = "";
+    if (!obj || obj.heldBy !== sessionId) return;
+    obj.heldBy = "";
+
+    // Al soltar, el iman encaja del todo: nada queda a medio camino entre dos
+    // casillas ni flotando un centimetro sobre el tablero. Se redondea antes
+    // de recortar, no despues, o redondear volveria a sacar del tablero lo
+    // que el recorte acababa de meter.
+    const grid = this.scene.placement.grid;
+    const placed = snapToPlacement(
+      this.scene.placement,
+      Math.round(obj.x / grid) * grid,
+      Math.round(obj.z / grid) * grid,
+      [obj.sx / 2, obj.sy / 2, obj.sz / 2],
+    );
+    obj.x = placed.x;
+    obj.y = placed.y;
+    obj.z = placed.z;
   }
 }
 
 function clamp(value: number, min: number, max: number) {
   return value < min ? min : value > max ? max : value;
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }

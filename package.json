@@ -7,7 +7,8 @@
     "apps/*"
   ],
   "scripts": {
-    "assets": "node scripts/vendor-mediapipe.mjs",
+    "assets": "node scripts/vendor-mediapipe.mjs && node scripts/hdri.mjs",
+    "assets:hdri": "node scripts/hdri.mjs",
     "postinstall": "npm run assets",
     "predev": "npm run assets",
     "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",

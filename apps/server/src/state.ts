@@ -81,11 +81,39 @@ export const SceneObject = schema(
 );
 export type SceneObject = SchemaType<typeof SceneObject>;
 
+/**
+ * Recorrido de los dos deslizadores del entorno: 180 grados cada uno.
+ *
+ * 16 bits y no 8 porque estos valores se arrastran con la mano: con 8 bits el
+ * paisaje gira a saltos de casi un grado y el deslizador se siente trabado.
+ * Solo viajan cuando el profesor los mueve, asi que no pesan en el tick.
+ */
+export const ENV_ROTATION = { min: -Math.PI / 2, max: Math.PI / 2, bits: 16 } as const;
+/** Cuanto se puede subir o bajar la esfera para alinear el horizonte. */
+export const ENV_HEIGHT = { min: -1.5, max: 1.5, bits: 16 } as const;
+
 export const AulaState = schema(
   {
     pin: t.string().default(""),
+    roomName: t.string().default(""),
+    /**
+     * `editing` mientras el profesor arma la escena a solas; `live` desde que
+     * pulsa comenzar. Es lo que decide si la API deja entrar a un estudiante.
+     */
+    phase: t.string<"editing" | "live">().default("editing"),
+    capacity: t.uint8().default(6),
+    students: t.uint8().default(5),
+
+    /** Entorno 360 elegido en el carrusel. "" es la habitacion en blanco. */
+    envId: t.string().default(""),
+    /** Giro horizontal y vertical de la esfera, desde los deslizadores. */
+    envYaw: t.quantized(ENV_ROTATION).default(0),
+    envPitch: t.quantized(ENV_ROTATION).default(0),
+    /** Subir o bajar la esfera para que su horizonte case con el suelo. */
+    envHeight: t.quantized(ENV_HEIGHT).default(0),
+
     environment: t.string().default("white-room"),
-    sceneVersion: t.uint16().default(4),
+    sceneVersion: t.uint16().default(5),
     halfSize: t.float32().default(4),
     players: t.map(Player),
     objects: t.map(SceneObject),

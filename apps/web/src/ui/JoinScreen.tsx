@@ -3,6 +3,9 @@ import { createSession, type CreatedSession } from "../net/api";
 
 export type InputMode = "camera" | "mouse";
 
+/** El mismo tope que aplica el servidor en makeScene. */
+const MAX_STUDENTS = 12;
+
 /**
  * Se guarda el salón creado para que recargar la página no le quite la clase
  * al profesor: el hostToken no se puede volver a pedir.
@@ -37,6 +40,15 @@ export function JoinScreen({
   const [mode, setMode] = useState<InputMode>("camera");
 
   const [code, setCode] = useState("");
+  const [roomName, setRoomName] = useState("");
+  /**
+   * Se guarda como texto y se ajusta al crear, no en cada tecla.
+   *
+   * Recortando al vuelo, reemplazar un 5 por un 8 escribe "58" y el campo lo
+   * corrige a 12 delante de quien escribe. Eso confunde mucho más que ver el
+   * número fuera de rango un segundo.
+   */
+  const [students, setStudents] = useState("5");
   const [salon, setSalon] = useState<CreatedSession | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -54,7 +66,11 @@ export function JoinScreen({
     setCreating(true);
     setCreateError(null);
     try {
-      const created = await createSession(code.trim());
+      const created = await createSession(
+        code.trim(),
+        roomName.trim(),
+        Math.min(MAX_STUDENTS, Math.max(1, Number(students) || 5)),
+      );
       setSalon(created);
       sessionStorage.setItem(STORE_KEY, JSON.stringify(created));
     } catch (problem) {
@@ -132,10 +148,10 @@ export function JoinScreen({
           </>
         ) : salon ? (
           <>
-            <h1>Tu salón está abierto</h1>
+            <h1>{salon.roomName}</h1>
             <p className="lede">
-              Comparte este PIN con tus estudiantes. El salón queda en pie aunque todavía
-              no haya entrado nadie.
+              El salón ya existe. Entra tú primero a armar la escena: mientras la armas
+              nadie puede entrar, y el PIN empieza a servir cuando pulses comenzar.
             </p>
             <div className="pin-show">
               <span>PIN</span>
@@ -156,9 +172,20 @@ export function JoinScreen({
                 {copied ? "Copiado" : "Copiar"}
               </button>
             </div>
+            <dl className="summary">
+              <div>
+                <dt>Estudiantes</dt>
+                <dd>{salon.students}</dd>
+              </div>
+              <div>
+                <dt>Cupo con el profesor</dt>
+                <dd>{salon.students + 1}</dd>
+              </div>
+            </dl>
             <p className="hint">
-              Ahora entra tú para dar la clase. Eres el único con el control del salón:
-              esa credencial vive solo en este navegador.
+              Eres el único con el control del salón: esa credencial vive solo en este
+              navegador. Reparte el PIN cuando quieras; quien llegue antes de tiempo
+              verá que estás preparando la sala y entrará solo al abrirla.
             </p>
           </>
         ) : (
@@ -178,11 +205,41 @@ export function JoinScreen({
                 autoComplete="off"
               />
             </label>
+            <label className="field">
+              <span>Nombre de la sala</span>
+              <input
+                id="roomName"
+                value={roomName}
+                onChange={(event) => setRoomName(event.target.value)}
+                placeholder="Mantenimiento de válvulas"
+                maxLength={48}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Cuántos estudiantes</span>
+              <input
+                id="students"
+                value={students}
+                onChange={(event) =>
+                  setStudents(event.target.value.replace(/\D/g, "").slice(0, 2))
+                }
+                placeholder="5"
+                inputMode="numeric"
+                autoComplete="off"
+              />
+            </label>
+            <p className="hint">
+              De aquí salen los puestos: se reparten en arco frente a la mesa, y el
+              salón no admite a nadie más. Van de 1 a {MAX_STUDENTS}. Medido de verdad
+              hay hasta seis; por encima de eso todavía no sabemos si aguanta los 30 fps
+              en celular.
+            </p>
             <button
               className="primary"
               type="button"
               onClick={handleCreate}
-              disabled={creating || code.trim().length < 4}
+              disabled={creating || code.trim().length < 4 || roomName.trim().length < 2}
             >
               {creating ? "Creando..." : "Crear salón"}
             </button>
@@ -233,7 +290,7 @@ export function JoinScreen({
               {busy
                 ? status || "Entrando..."
                 : isTeacher
-                  ? "Entrar a dar la clase"
+                  ? "Entrar a armar el salón"
                   : "Entrar al salón"}
             </button>
 

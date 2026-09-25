@@ -1,8 +1,9 @@
-# Aula EAN Visual — fase 1
+# Aula EAN Visual
 
-Prueba de concepto de la plataforma académica multijugador en WebXR: habitación
-blanca, tres assets, agarrar y mover con las manos por cámara, 5 estudiantes +
-profesor con voz espacial.
+Plataforma académica multijugador en WebXR. El profesor arma el salón con las
+manos —entorno 360, mesa, piezas— y después reparte un PIN; los estudiantes
+entran desde una URL, ven la misma escena y la manipulan con las manos por
+cámara, con voz espacial.
 
 Web-first sobre TypeScript. Un mismo código sirve a PC y celular desde una URL.
 El Quest 3 (WebXR Hand Input) entra en la fase 2; la capa de entrada ya está
@@ -18,10 +19,15 @@ npm run dev
 
 Abre <http://localhost:5173>:
 
-1. **Soy profesor** → escribe el código que imprimió el servidor al arrancar →
-   **Crear salón**. Aparece el PIN y el salón queda abierto.
-2. Escribe tu nombre y entra a dar la clase.
-3. En otra pestaña, **Soy estudiante** → ese PIN → otro nombre → entrar.
+1. **Soy profesor** → el código que imprimió el servidor al arrancar, el nombre
+   de la sala y cuántos estudiantes esperas → **Crear salón**. Aparece el PIN.
+2. Entra a **armar el salón**: estás solo, con la mesa y los paneles del editor.
+   Elige un entorno 360, saca piezas y ponlas sobre la mesa.
+3. **Revisar y comenzar**. Hasta ese momento el PIN no deja entrar a nadie.
+4. En otra pestaña, **Soy estudiante** → ese PIN → otro nombre → entrar.
+
+Quien llegue antes de que abras no ve un error: su pantalla dice que estás
+preparando el salón y entra sola en cuanto pulsas comenzar.
 
 ### Quién puede crear salones
 
@@ -46,6 +52,7 @@ mitad de clase: se desecha a los 45 minutos vacío, o cuando vence el PIN a las
 | `npm run build` | Compila el cliente a `apps/web/dist` |
 | `npm start` | Servidor solo, sirviendo el cliente compilado en un único puerto |
 | `npm run typecheck` | Verifica tipos en cliente y servidor |
+| `npm run assets:hdri` | Reduce la carpeta `HDRI/` a entornos servibles |
 | `npm run smoke -w @aula/server` | Dos participantes reales: poses, agarres, autoridad del servidor |
 | `npm run test:acceso -w @aula/server` | Control de acceso de profesor y vida del salón |
 | `npm run test:navegador` | La aplicación en un Chrome real, con capturas |
@@ -59,9 +66,16 @@ para verificar que el túnel transporta también el WebSocket:
 
 `npm run test:navegador` abre un Chrome de verdad (usa el que ya está instalado,
 vía `puppeteer-core`) y recorre la sesión completa: el profesor crea el salón,
-entra con mouse, apunta, agarra un objeto, lo mueve y lo suelta; después un
-estudiante entra por PIN con las manos por cámara. Deja capturas en
+entra a armarlo, elige un entorno 360, gira el paisaje con un deslizador, saca
+un cubo del panel de objetos, lo lleva a la mesa, revisa y abre la sesión;
+después un estudiante entra por PIN con las manos por cámara. Deja capturas en
 `.capturas/`.
+
+Los paneles del editor viven dentro del lienzo: no hay nodos del DOM que pulsar.
+En desarrollo la propia interfaz publica `window.__aulaWidgets()`, que proyecta
+cada control a coordenadas de pantalla, y la prueba pulsa ahí. Sin eso tendría
+que barrer la pantalla a ciegas, tardando un minuto y pulsando de paso los
+botones que encontrara.
 
 Existe por una razón concreta: los fallos del render 3D y del worker de
 MediaPipe se ven en el navegador como una pantalla negra, y ninguna prueba de
@@ -69,25 +83,72 @@ servidor los detecta. Dos aciertos suyos: que `room.state` llegaba `undefined` y
 tumbaba el árbol de React, y que MediaPipe fallaba con *ModuleFactory not set*
 por cargar la variante clásica de su runtime en un worker ESM.
 
-Un detalle que hace la prueba real: el paso de agarrar espera a que el HUD diga
-**"Tienes:"**, y eso solo ocurre cuando el estado del servidor confirma
-`heldBy`. No comprueba que el cliente crea haber agarrado algo, sino que el
-servidor se lo concedió.
+Dos detalles que hacen la prueba real:
+
+- El paso de agarrar espera a que el HUD diga **"Tienes:"**, y eso solo ocurre
+  cuando el estado del servidor confirma `heldBy`. No comprueba que el cliente
+  crea haber agarrado algo, sino que el servidor se lo concedió.
+- Después comprueba que la pieza **se dibuja**: que su matriz no tiene valores
+  que no sean números. Un solo NaN en el estado —un giro que el servidor nunca
+  asignó, por ejemplo— deja la pieza en la escena, en su sitio, con su malla, y
+  three la dibuja en cada cuadro sin pintar un píxel. Eso ya pasó una vez, y
+  ninguna comprobación de posición lo nota.
 
 ## Qué hay dentro
 
 ```
 apps/server/    API + Colyseus + PIN. Autoridad sobre la escena.
   state.ts        Estado sincronizado. Poses cuantizadas: ~48 B por participante.
-  AulaRoom.ts     Sala: puntos, agarres, validación de cada acción.
+  AulaRoom.ts     Sala: puntos, agarres, edición, validación de cada acción.
   tickets.ts      PIN → sala, y ticket de un solo uso para entrar.
-  scene.ts        La escena de la fase 1, en el JSON declarativo del documento.
+  scene.ts        La escena de cada salón, y el imán que la ordena.
+  environments.ts Catálogo de entornos 360, y su validación.
 
 apps/web/       Cliente React + Three.js.
   input/          Capa de entrada abstracta. Ver abajo.
-  scene/          Habitación, objetos, avatares, jugador local.
+  scene/          Suelo, entorno 360, objetos, avatares, jugador local.
+  ui3d/           El editor del profesor: paneles, botones y deslizadores en 3D.
   net/            API, Colyseus y voz con audio espacial.
+
+scripts/hdri.mjs  Reduce las HDRI de 4K a algo que quepa por la red.
 ```
+
+### El editor del profesor
+
+Antes de abrir el salón, el profesor lo arma a solas. Todo se opera con las
+manos y **nada de esa interfaz está en el DOM**: son paneles dentro de la escena
+3D, porque tienen que estar donde apunta la mano, y algo en HTML encima del
+lienzo no recibe el rayo del puntero.
+
+```
+   carrusel de entornos 360        objetos: esfera, cilindro, cubo
+   ubicar el entorno               revisar y comenzar
+                 deslizadores de giro del escenario
+```
+
+Los paneles están **anclados alrededor del puesto**, no pegados a la cabeza: un
+menú que sigue la mirada marea. Para que se pueda llegar a ellos sin perder la
+mano de cuadro, es la cámara la que sigue a la mano, y solo cuando la mano se
+acerca al borde.
+
+Un botón pensado para hand tracking no se pulsa como uno de mouse: la mano
+tiembla y el pellizco a veces no se lee. Hay dos caminos para lo mismo —
+pellizcar, o **sostener la mano encima** algo menos de un segundo—, y el anillo
+que se va llenando alrededor del cursor es lo que hace que el segundo se
+entienda sin explicarlo.
+
+### El imán
+
+Las piezas no flotan. Al arrastrarlas, el servidor las recorta a la zona
+permitida —el tablero y una franja de piso alrededor—, las encaja en una
+rejilla de 5 cm y las apoya en la superficie que les toca. La misma función
+corre en el cliente, que predice mientras se arrastra; están duplicadas a
+propósito y tienen que seguir iguales, o la pieza dará un salto justo al
+soltarla, que es cuando más se nota.
+
+Con seguimiento por cámara la profundidad es lo más impreciso que hay. Por eso
+la pieza no va a una distancia deducida del tamaño de la palma, sino a donde el
+rayo corta el tablero: se apunta a la mesa y la pieza cae ahí.
 
 ### La capa de entrada
 
@@ -108,13 +169,16 @@ dispositivo.
 | Gesto | Acción |
 |---|---|
 | Índice extendido | Apuntar |
-| Pellizco | Seleccionar |
+| Pellizco | Seleccionar, pulsar un botón, soltar la pieza que se lleva |
+| Mano quieta sobre un botón | Pulsarlo, sin depender de ningún gesto |
 | Puño cerrado | Agarrar y mover |
-| Mano abierta | Soltar |
+| Mano abierta | Soltar lo que se agarró con el puño |
 | Mano arriba 1 s | Pedir la palabra |
 
-Para acercar o alejar lo que tienes agarrado, mueve la mano hacia la cámara o
-lejos de ella: el tamaño aparente de la palma controla la distancia.
+Abrir la mano suelta lo que se agarró cerrando el puño. Una pieza recién sacada
+del panel llega a una mano que nunca se cerró, así que para esa el gesto es el
+pellizco: si bastara con abrir, se caería en el aire en el mismo instante de
+aparecer.
 
 ## Infraestructura: el túnel y el audio
 
@@ -183,8 +247,10 @@ fallar en silencio.
 | WASM de MediaPipe | 3,29 MB | 11,21 MB sin comprimir |
 | Modelo `hand_landmarker.task` | 7,46 MB | Desde el CDN de Google |
 | JavaScript de la aplicación | 0,50 MB | 1,76 MB sin comprimir |
+| Miniaturas del carrusel | 0,19 MB | Las tres juntas |
 | CSS y HTML | 6 kB | |
-| **Total** | **≈ 11,3 MB** | Presupuesto de celular: 15 MB |
+| **Total** | **≈ 11,5 MB** | Presupuesto de celular: 15 MB |
+| Un entorno 360, al elegirlo | 1,7 MB | No entra en la carga inicial |
 
 Cabe, pero sin holgura, y **dos tercios son el detector de manos**. Tres cosas
 que conviene saber:
@@ -206,14 +272,33 @@ VITE_HAND_MODEL_URL=/models/hand_landmarker.task
 
 Eso además evita una petición a un tercero desde el dispositivo del estudiante.
 
+### Los entornos 360
+
+Las HDRI originales son 4K y pesan unos 25 MB cada una: 78 MB entre tres, contra
+un presupuesto de 15 MB. `npm run assets:hdri` lee la carpeta `HDRI/` —que no va
+al repositorio— y deja en `apps/server/public/hdri/`, por cada archivo:
+
+- una versión equirectangular de 1024×512 en RGBE, ~1,7 MB, que es lo que aguanta
+  un celular de gama media como mapa de entorno sin comerse los 30 fps;
+- una miniatura de 256×128 tonemapeada, unas decenas de KB.
+
+El carrusel solo descarga miniaturas. La HDRI completa baja cuando el profesor
+elige ese entorno, con barra de progreso, y hasta que llega se sigue viendo lo
+que había. Todo en Node puro: el script trae su propio lector y escritor de
+Radiance y su propio codificador de PNG, porque una dependencia nativa más sería
+una razón más para que el proyecto no compile en la máquina de al lado.
+
 ## Límites conocidos de la fase 1
 
 Son deliberados, no pendientes olvidados:
 
 - **Sin persistencia.** El PIN y los tickets viven en memoria. Redis y Supabase
   entran en la fase 2; la interfaz de `tickets.ts` no cambia.
-- **Assets primitivos.** Caja, cilindro y caja. Poner un GLB es cambiar el campo
-  `src` en `scene.ts`, sin tocar código.
+- **Assets primitivos.** Esfera, cilindro y cubo. Poner un GLB es cambiar el
+  campo `src` en `scene.ts`, sin tocar código; subirlos desde la interfaz es
+  fase 2.
+- **La escena no se guarda.** El profesor arma el salón cada vez. Persistir
+  escenas es fase 2, junto con Supabase.
 - **Sin seguimiento de cabeza.** La cámara vive en el punto asignado y la cabeza
   del avatar se inclina hacia donde apunta la mano. Suficiente para validar
   gestos; un rastreador de rostro costaría una segunda red neuronal.
@@ -234,7 +319,9 @@ El criterio de éxito es *30 fps en celular de gama media y gestos usables sin
 instrucciones largas*. El HUD muestra fps de render y de detección en vivo. Hay
 que probarlo con los equipos reales de los estudiantes, no con un emulador:
 
-1. ¿Se sostienen los 30 fps con 6 participantes en la sala?
-2. ¿Cuánto tarda alguien que nunca lo ha visto en agarrar y mover la válvula?
-3. ¿Aguanta la detección con luz de techo y con contraluz?
-4. ¿A los cuántos minutos se cansa el brazo?
+1. ¿Se sostienen los 30 fps con 6 participantes y un entorno 360 puesto?
+2. ¿Cuánto tarda alguien que nunca lo ha visto en agarrar y mover una pieza?
+3. ¿Cuánto tarda un profesor en armar un salón completo, sin ayuda?
+4. ¿Se pulsan los botones del editor con la mano, o hay que pellizcar tres veces?
+5. ¿Aguanta la detección con luz de techo y con contraluz?
+6. ¿A los cuántos minutos se cansa el brazo?

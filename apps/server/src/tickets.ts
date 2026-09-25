@@ -6,10 +6,19 @@
  * la seccion 04 del documento; la interfaz de este modulo no cambia.
  */
 import { randomInt, randomUUID } from "node:crypto";
+import type { Scene } from "./scene";
 
 export interface Session {
   pin: string;
   roomId: string;
+  /**
+   * La escena con la que nacio el salon.
+   *
+   * Vive aqui y no en una constante porque desde la fase 2 cada salon tiene la
+   * suya: el nombre, el cupo y los puestos salen de lo que el profesor escribio
+   * al crearlo. La API la devuelve tal cual a quien entra con el PIN.
+   */
+  scene: Scene;
   /**
    * Credencial del profesor que creo el salon. Es lo unico que otorga el rol
    * de profesor: el cliente no puede pedirlo. Sin esto, cualquiera que
@@ -41,23 +50,41 @@ const PIN_TTL_MS = 4 * 60 * 60 * 1000;
 /** El ticket solo tiene que sobrevivir el salto de la API a Colyseus. */
 const TICKET_TTL_MS = 60 * 1000;
 
-export function createSession(roomId: string): Session {
+/**
+ * Aparta un PIN libre antes de que exista la sala.
+ *
+ * El salon necesita su PIN en el estado -la vista previa del profesor lo
+ * muestra dentro de la escena-, y el estado se llena al crearla. Asi que el
+ * PIN se aparta primero y la sala nace sabiendolo. La reserva se mantiene
+ * hasta que `createSession` la convierte en sesion, o caduca sola: entre las
+ * dos cosas hay un await, y dos profesores creando salones a la vez no pueden
+ * salir con el mismo numero.
+ */
+const reserved = new Map<string, number>();
+const RESERVE_TTL_MS = 30 * 1000;
+
+export function reservePin(): string {
   sweep();
-  let pin = "";
   // Hasta 20 intentos para no colisionar con un PIN vivo.
   for (let i = 0; i < 20; i++) {
     const candidate = String(randomInt(100000, 1000000));
-    if (!sessions.has(candidate)) {
-      pin = candidate;
-      break;
+    if (!sessions.has(candidate) && !reserved.has(candidate)) {
+      reserved.set(candidate, Date.now() + RESERVE_TTL_MS);
+      return candidate;
     }
   }
-  if (!pin) throw new Error("No se pudo generar un PIN libre.");
+  throw new Error("No se pudo generar un PIN libre.");
+}
+
+export function createSession(pin: string, roomId: string, scene: Scene): Session {
+  sweep();
+  reserved.delete(pin);
 
   const now = Date.now();
   const session: Session = {
     pin,
     roomId,
+    scene,
     hostToken: randomUUID(),
     createdAt: now,
     expiresAt: now + PIN_TTL_MS,
@@ -109,6 +136,9 @@ function sweep() {
   const now = Date.now();
   for (const [pin, session] of sessions) {
     if (session.expiresAt < now) sessions.delete(pin);
+  }
+  for (const [pin, until] of reserved) {
+    if (until < now) reserved.delete(pin);
   }
   for (const [id, ticket] of tickets) {
     if (ticket.expiresAt < now) tickets.delete(id);

@@ -40,6 +40,19 @@ export function SceneObjects({
 
 const tint = new Color();
 
+/**
+ * Un numero del estado, o cero si no lo es.
+ *
+ * Un solo NaN en la posicion o el giro llena de NaN la matriz del objeto, y
+ * entonces three lo sigue dibujando en cada cuadro sin pintar un pixel: la
+ * pieza existe, el rayo la encuentra, el estado la tiene, y no se ve. No es un
+ * fallo que se diagnostique mirando la pantalla, asi que mejor no dejar que
+ * ocurra.
+ */
+function finite(value: number) {
+  return Number.isFinite(value) ? value : 0;
+}
+
 function SceneObjectMesh({
   id,
   room,
@@ -65,11 +78,11 @@ function SceneObjectMesh({
       mesh.position.copy(mine);
     } else {
       // Interpolacion: el estado llega a 20 Hz y el render corre a 60.
-      mesh.position.x = MathUtils.damp(mesh.position.x, object.x, 14, delta);
-      mesh.position.y = MathUtils.damp(mesh.position.y, object.y, 14, delta);
-      mesh.position.z = MathUtils.damp(mesh.position.z, object.z, 14, delta);
+      mesh.position.x = MathUtils.damp(mesh.position.x, finite(object.x), 14, delta);
+      mesh.position.y = MathUtils.damp(mesh.position.y, finite(object.y), 14, delta);
+      mesh.position.z = MathUtils.damp(mesh.position.z, finite(object.z), 14, delta);
     }
-    mesh.rotation.y = MathUtils.damp(mesh.rotation.y, object.ry, 14, delta);
+    mesh.rotation.y = MathUtils.damp(mesh.rotation.y, finite(object.ry), 14, delta);
 
     const material = mesh.material as MeshStandardMaterial;
     const held = object.heldBy !== "";

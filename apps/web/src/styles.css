@@ -232,6 +232,37 @@ input:focus-visible {
   flex: 1;
 }
 
+/*
+  Resumen del salon recien creado: cuantos caben, para que el profesor lo vea
+  antes de entrar y no descubra el cupo cuando alguien se quede fuera.
+*/
+.summary {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+}
+
+.summary div {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.summary dt {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.summary dd {
+  margin: 4px 0 0;
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .ghost.small {
   padding: 7px 12px;
   font-size: 0.82rem;
@@ -438,6 +469,13 @@ input:focus-visible {
   background: var(--warn);
   color: #221a06;
   border-color: transparent;
+  font-weight: 600;
+}
+
+.chip.editing {
+  background: color-mix(in srgb, var(--warn) 24%, rgba(13, 18, 19, 0.85));
+  border-color: var(--warn);
+  color: #f6e6cf;
   font-weight: 600;
 }
 

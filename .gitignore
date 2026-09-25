@@ -10,3 +10,7 @@ apps/server/public/mediapipe/
 .claude/
 tunnel/*.json
 !tunnel/config.yml
+# Las HDRI originales: 4K, unos 25 MB cada una. Con la barra delante para que
+# solo tape la carpeta de la raiz; sin ella tapaba tambien las reducidas de
+# apps/server/public/hdri, que si van al repositorio para que un clon funcione.
+/HDRI/

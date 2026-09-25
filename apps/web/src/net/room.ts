@@ -52,6 +52,16 @@ export interface ObjectView {
 
 export interface AulaStateView {
   pin: string;
+  roomName: string;
+  /** `editing` mientras el profesor arma la escena; `live` desde comenzar. */
+  phase: "editing" | "live";
+  capacity: number;
+  students: number;
+  /** Entorno 360 elegido. "" es la habitación en blanco. */
+  envId: string;
+  envYaw: number;
+  envPitch: number;
+  envHeight: number;
   environment: string;
   halfSize: number;
   players: Map<string, PlayerView>;
@@ -100,6 +110,10 @@ function firstState(room: AulaRoom, timeoutMs = 10000): Promise<void> {
 export interface RoomEvents {
   onPlayers(ids: string[]): void;
   onObjects(ids: string[]): void;
+  /** El entorno 360 cambia poco, así que sí vale un render de React. */
+  onEnvironment(envId: string): void;
+  /** De `editing` a `live` cuando el profesor pulsa comenzar. */
+  onPhase(phase: "editing" | "live"): void;
   onLeave(code: number): void;
   onError(message: string): void;
 }
@@ -137,6 +151,12 @@ export async function connectToRoom(
     objectIds.delete(id);
     events.onObjects([...objectIds]);
   });
+
+  // Estos dos sí pasan por React: cambian unas pocas veces por sesión y
+  // deciden qué se dibuja, no dónde. El giro del entorno, que sí llega a 20 Hz
+  // mientras se arrastra un deslizador, se lee dentro de useFrame.
+  $(room.state).listen("envId", (value: string) => events.onEnvironment(value));
+  $(room.state).listen("phase", (value: "editing" | "live") => events.onPhase(value));
 
   room.onLeave((code: number) => events.onLeave(code));
   room.onError((code: number, message?: string) =>

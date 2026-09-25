@@ -4,7 +4,10 @@ import type { HudSnapshot } from "../scene/LocalPlayer";
 export function Hud({
   snapshot,
   pin,
+  roomName,
+  editing,
   participants,
+  capacity,
   micOn,
   voiceOn,
   onToggleMic,
@@ -12,7 +15,11 @@ export function Hud({
 }: {
   snapshot: HudSnapshot;
   pin: string;
+  roomName: string;
+  /** El profesor armando la escena, antes de abrir el salón. */
+  editing: boolean;
   participants: number;
+  capacity: number;
   micOn: boolean;
   voiceOn: boolean;
   onToggleMic: () => void;
@@ -24,11 +31,18 @@ export function Hud({
     <>
       <div className="hud-top">
         <span className="chip">
-          PIN <b>{pin || "—"}</b>
+          {roomName || "Salón"}
         </span>
         <span className="chip">
-          En la sala <b>{participants}</b>
+          PIN <b>{pin || "—"}</b>
         </span>
+        {editing ? (
+          <span className="chip editing">Armando el salón · nadie ha entrado</span>
+        ) : (
+          <span className="chip">
+            En la sala <b>{participants}</b> de {capacity}
+          </span>
+        )}
         {snapshot.handRaised && <span className="chip raised">Pediste la palabra</span>}
       </div>
 
@@ -61,9 +75,19 @@ export function Hud({
       </div>
 
       <div className="hud-help">
-        <b>Puño</b> agarra · <b>mano abierta</b> suelta · <b>pellizco</b> selecciona ·{" "}
-        <b>mano arriba 1 s</b> pide la palabra
-        {snapshot.source === "camera" && <> · arrastra para mirar alrededor</>}
+        {editing ? (
+          <>
+            <b>Apunta</b> a un botón y <b>deja la mano quieta</b> —o pellizca— para
+            pulsarlo · la pieza que sacas <b>ya viene en la mano</b>: llévala a la mesa
+            y <b>pellizca</b> para soltarla · la mesa la atrae sola
+          </>
+        ) : (
+          <>
+            <b>Puño</b> agarra · <b>mano abierta</b> suelta · <b>pellizco</b> selecciona ·{" "}
+            <b>mano arriba 1 s</b> pide la palabra
+            {snapshot.source === "camera" && <> · arrastra para mirar alrededor</>}
+          </>
+        )}
       </div>
     </>
   );

@@ -34,11 +34,28 @@ check(sinCodigo.status === 401, "sin codigo se rechaza", `HTTP ${sinCodigo.statu
 const codigoMalo = await call("/api/sessions", { code: "incorrecto" });
 check(codigoMalo.status === 401, "codigo incorrecto se rechaza", `HTTP ${codigoMalo.status}`);
 
-const creado = await call("/api/sessions", { code: CODE });
+const creado = await call("/api/sessions", { code: CODE, roomName: "Taller", students: 3 });
 check(creado.status === 200, "con el codigo correcto se crea", `PIN ${creado.body.pin}`);
 check(Boolean(creado.body.hostToken), "devuelve credencial de profesor");
 
 const { pin, hostToken } = creado.body;
+
+// --- mientras el profesor arma la escena, el salon no recibe ------------
+console.log("\nFase de edicion");
+const antesDeAbrir = await call("/api/join", { pin, alias: "Impaciente" });
+check(antesDeAbrir.status === 409, "un estudiante no entra al salon a medio armar", `HTTP ${antesDeAbrir.status}`);
+
+const armador = await call("/api/join", { pin, alias: "Profe", hostToken });
+check(armador.status === 200, "el profesor si entra a armarlo", `HTTP ${armador.status}`);
+
+const cArmador = new Client(API);
+const salaArmador = await cArmador.joinById(armador.body.roomId, { ticket: armador.body.ticket });
+await sleep(400);
+salaArmador.send("publish");
+await sleep(400);
+check(salaArmador.state.phase === "live", "al pulsar comenzar el salon abre", salaArmador.state.phase);
+await salaArmador.leave();
+await sleep(300);
 
 // --- el salon sobrevive sin nadie adentro -------------------------------
 console.log("\nVida del salon");

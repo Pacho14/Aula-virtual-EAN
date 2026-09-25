@@ -1,13 +1,14 @@
 /**
  * Prueba de humo en un navegador real.
  *
- * Recorre lo que hace una persona -crear el salon, entrar, apuntar, agarrar y
- * soltar- y reporta errores de consola y peticiones fallidas. Sin esto, un
- * fallo en el render 3D solo se ve como una pantalla negra.
+ * Recorre lo que hace una persona: crear el salon, armarlo con los paneles de
+ * la escena -entorno 360, sacar una pieza, ponerla sobre la mesa-, abrirlo, y
+ * entrar como estudiante. Reporta errores de consola y peticiones fallidas.
+ * Sin esto, un fallo en el render 3D solo se ve como una pantalla negra.
  *
- * Los textos de los botones se buscan por fragmentos sin tildes a proposito:
- * asi la prueba no se rompe si alguien reescribe el archivo con otra
- * codificacion.
+ * Los paneles del editor viven dentro del lienzo, asi que no hay nodos del
+ * DOM que pulsar. Se usa la sonda que el propio editor publica en desarrollo
+ * (window.__aulaWidgets) para saber donde cae cada control en pantalla.
  *
  *   node scripts/navegador.mjs [url] [codigoProfesor]
  */
@@ -68,12 +69,21 @@ function vigilar(pagina, etiqueta) {
     errores.push(`[${etiqueta}:red] ${r.url()} -> ${r.failure()?.errorText}`);
   });
   pagina.on("response", (r) => {
-    if (r.status() >= 400 && !RUIDO.test(r.url())) {
+    // El 409 del salon a medio armar es la respuesta correcta, no un fallo:
+    // asi es como el estudiante que llega antes se queda esperando.
+    if (r.status() >= 400 && r.status() !== 409 && !RUIDO.test(r.url())) {
       errores.push(`[${etiqueta}:red] HTTP ${r.status()} ${r.url()}`);
     }
   });
 }
 
+/**
+ * Un paso del recorrido.
+ *
+ * Al fallar deja una captura y el texto que hubiera en pantalla: un paso que
+ * solo dice "fallo" obliga a reproducirlo a mano para saber que paso.
+ */
+let pagActual = null;
 const paso = async (label, fn) => {
   process.stdout.write(`  ${label}... `);
   try {
@@ -81,11 +91,26 @@ const paso = async (label, fn) => {
     console.log("ok");
   } catch (e) {
     console.log("FALLO");
-    errores.push(`[paso: ${label}] ${e.message}`);
+    let contexto = "";
+    if (pagActual) {
+      const nombre = `fallo-${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+      try {
+        await pagActual.screenshot({ path: resolve(shots, `${nombre}.png`) });
+        contexto = await pagActual.evaluate(() => {
+          const error = document.querySelector(".error, .crash-card")?.textContent ?? "";
+          const estado = document.querySelector(".join-card, .hud-top")?.textContent ?? "";
+          return `${error} | ${estado}`.trim().slice(0, 300);
+        });
+      } catch {
+        contexto = "(no se pudo inspeccionar la pagina)";
+      }
+      contexto = `\n         en pantalla: ${contexto}\n         captura: .capturas/${nombre}.png`;
+    }
+    errores.push(`[paso: ${label}] ${e.message}${contexto}`);
   }
 };
 
-/** Pulsa el primer boton cuyo texto contenga `fragmento`. */
+/** Pulsa el primer boton del DOM cuyo texto contenga `fragmento`. */
 const pulsar = (pagina, fragmento) =>
   pagina.evaluate((f) => {
     const boton = [...document.querySelectorAll("button")].find((b) =>
@@ -105,7 +130,7 @@ const hudDice = (pagina, fragmento) =>
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ========================================================================
-// Profesor: crea el salon y trabaja con el mouse.
+// Profesor: crea el salon y lo arma con el mouse.
 // ========================================================================
 console.log(`\nAbriendo ${APP_URL}\n`);
 console.log("Profesor");
@@ -113,8 +138,31 @@ console.log("Profesor");
 const profe = await browser.newPage();
 await profe.setViewport({ width: 1280, height: 800 });
 vigilar(profe, "profe");
+pagActual = profe;
 
 const capturar = (nombre) => profe.screenshot({ path: resolve(shots, `${nombre}.png`) });
+
+/** Donde cae en pantalla un control de la interfaz espacial. */
+const donde = async (id) => {
+  const sitio = await profe.evaluate((wid) => {
+    const probe = window.__aulaWidgets;
+    if (typeof probe !== "function") return null;
+    return probe()[wid] ?? null;
+  }, id);
+  if (!sitio) throw new Error(`el control "${id}" no esta en pantalla`);
+  return sitio;
+};
+
+/** Apunta a un control y lo pulsa: con mouse, pulsar es cerrar la mano. */
+const pulsarWidget = async (id) => {
+  const sitio = await donde(id);
+  await profe.mouse.move(sitio.x, sitio.y);
+  await esperar(120);
+  await profe.mouse.down();
+  await esperar(120);
+  await profe.mouse.up();
+  await esperar(250);
+};
 
 await paso("cargar la pagina", async () => {
   await profe.goto(APP_URL, { waitUntil: "networkidle2", timeout: 40000 });
@@ -131,24 +179,36 @@ await paso("pestana de profesor", async () => {
   await profe.waitForSelector("#code", { timeout: 8000 });
 });
 
-await paso("crear el salon", async () => {
+await paso("crear el salon con nombre y cupo", async () => {
   await profe.type("#code", CODE);
+  await profe.type("#roomName", "Mantenimiento de valvulas");
+  // Seleccionar y reemplazar: escribir sin mas dejaria "54".
+  await profe.click("#students", { clickCount: 3 });
+  await profe.keyboard.press("Backspace");
+  await profe.type("#students", "4");
   await pulsar(profe, "Crear sal");
   await profe.waitForSelector(".pin-show b", { timeout: 15000 });
 });
 
 const pin = await profe.$eval(".pin-show b", (el) => el.textContent.trim()).catch(() => "?");
 console.log(`     PIN del salon: ${pin}`);
+
+await paso("el resumen muestra el cupo que se pidio", async () => {
+  const texto = await profe.$eval(".summary", (el) => el.textContent ?? "");
+  if (!texto.includes("4") || !texto.includes("5")) {
+    throw new Error(`esperaba 4 estudiantes y cupo 5, dice: "${texto}"`);
+  }
+});
 await capturar("2-salon-creado");
 
-await paso("entrar en modo mouse", async () => {
+await paso("entrar a armar el salon", async () => {
   await profe.type("#alias", "Profe");
   await pulsar(profe, "Mouse");
-  await pulsar(profe, "Entrar a dar la clase");
+  await pulsar(profe, "Entrar a armar");
   await profe.waitForSelector("canvas", { timeout: 20000 });
   await esperar(3000);
 });
-await capturar("3-sala");
+await capturar("3-editor");
 
 await paso("el lienzo dibuja algo", async () => {
   const info = await profe.evaluate(() => {
@@ -169,46 +229,137 @@ await paso("el lienzo dibuja algo", async () => {
   process.stdout.write("  ");
 });
 
-/** Barre el lienzo hasta que el HUD diga que esta apuntando a algo. */
-async function apuntarAlgo() {
-  for (let y = 360; y <= 500; y += 20) {
-    for (let x = 380; x <= 900; x += 20) {
-      await profe.mouse.move(x, y);
-      await esperar(60);
-      const texto = await profe.$eval(".hud-bottom", (el) => el.textContent ?? "");
-      const m = texto.match(/Apuntando:\s*(\S+)/);
-      if (m) return { x, y, id: m[1] };
-    }
-  }
-  return null;
-}
-
-let objetivo = null;
-await paso("apuntar a un objeto", async () => {
-  objetivo = await apuntarAlgo();
-  if (!objetivo) throw new Error("el rayo no encontro ningun objeto agarrable");
-  console.log(`\n     apuntando a "${objetivo.id}" en (${objetivo.x}, ${objetivo.y})`);
+await paso("los paneles del editor estan ahi", async () => {
+  const controles = await profe.evaluate(() =>
+    typeof window.__aulaWidgets === "function" ? Object.keys(window.__aulaWidgets()) : [],
+  );
+  if (controles.length === 0) throw new Error("la interfaz espacial no registro ningun control");
+  const faltan = ["add-box", "env-apply", "slider-yaw", "open-preview"].filter(
+    (id) => !controles.includes(id),
+  );
+  if (faltan.length) throw new Error(`faltan controles: ${faltan.join(", ")}`);
+  console.log(`\n     ${controles.length} controles: ${controles.join(", ")}`);
   process.stdout.write("  ");
 });
-await capturar("4-apuntando");
 
-await paso("agarrarlo (lo concede el servidor)", async () => {
+// --- entorno 360 --------------------------------------------------------
+await paso("elegir un entorno 360", async () => {
+  await pulsarWidget("env-apply");
+  // La HDRI pesa ~1,7 MB: se le da tiempo y se comprueba que llego mirando
+  // el estado de la sala, no la imagen.
+  await profe.waitForFunction(
+    () => {
+      const probe = window.__aulaWidgets?.();
+      // "Usar este" se deshabilita -y desaparece de la sonda- cuando el
+      // entorno que muestra el carrusel ya es el que esta puesto.
+      return probe && !probe["env-apply"];
+    },
+    { timeout: 45000, polling: 500 },
+  );
+  await esperar(2500);
+});
+await capturar("4-entorno-puesto");
+
+await paso("girar el entorno con un deslizador", async () => {
+  const riel = await donde("slider-yaw");
+  await profe.mouse.move(riel.x, riel.y);
   await profe.mouse.down();
-  // "Tienes:" solo aparece cuando el estado del servidor confirma heldBy, asi
-  // que verlo prueba el camino completo de ida y vuelta.
+  await profe.mouse.move(riel.x + 120, riel.y, { steps: 12 });
+  await esperar(400);
+  await profe.mouse.up();
+  await esperar(300);
+});
+await capturar("5-entorno-girado");
+
+// El mismo recorte con la mesa vacia, para poder comparar. Sin el, no hay
+// forma de distinguir "la pieza no se dibuja" de "no la distingo en una
+// captura de 1280 pixeles".
+await profe.screenshot({
+  path: resolve(shots, "7a-mesa-vacia.png"),
+  clip: { x: 510, y: 340, width: 260, height: 260 },
+});
+
+// --- sacar una pieza y ponerla en la mesa -------------------------------
+await paso("sacar un cubo del panel de objetos", async () => {
+  await pulsarWidget("add-box");
+  // La pieza nace y se engancha a la mano sola: "Tienes:" solo aparece
+  // cuando el servidor confirma que es suya, asi que verlo prueba el camino
+  // completo de ida y vuelta.
   await hudDice(profe, "Tienes:");
 });
+await capturar("6-pieza-en-la-mano");
 
-await paso("moverlo y soltarlo", async () => {
-  await profe.mouse.move(objetivo.x - 140, objetivo.y - 60, { steps: 16 });
+await paso("llevarla a la mesa y soltarla", async () => {
+  // El centro del lienzo mira a la mesa: apuntar ahi es apuntar al tablero.
+  await profe.mouse.move(640, 470, { steps: 12 });
   await esperar(500);
-  await capturar("5-arrastrando");
+  // La pieza viene en la mano sin que nadie haya cerrado el puno: se suelta
+  // abriendo la mano, que con mouse es pulsar y soltar.
+  await profe.mouse.down();
+  await esperar(150);
   await profe.mouse.up();
-  await esperar(700);
+  await esperar(900);
   const texto = await profe.$eval(".hud-bottom", (el) => el.textContent ?? "");
-  if (texto.includes("Tienes:")) throw new Error("no lo solto al levantar el boton");
+  if (texto.includes("Tienes:")) throw new Error("no la solto al levantar el boton");
 });
-await capturar("6-tras-soltar");
+await capturar("7-pieza-en-la-mesa");
+
+await paso("la pieza quedo apoyada en el tablero y se ve", async () => {
+  const piezas = await profe.evaluate(() =>
+    typeof window.__aulaObjetos === "function" ? window.__aulaObjetos() : {},
+  );
+  const [id, pieza] = Object.entries(piezas)[0] ?? [];
+  if (!pieza) throw new Error("la escena no tiene ninguna pieza agarrable");
+  console.log(
+    `\n     ${id} en x=${pieza.world.x.toFixed(2)} y=${pieza.world.y.toFixed(2)} ` +
+      `z=${pieza.world.z.toFixed(2)}, en pantalla (${Math.round(pieza.x)}, ${Math.round(pieza.y)})`,
+  );
+  process.stdout.write("  ");
+  // Un recorte alrededor de la pieza. Una pieza de 18 cm a dos metros ocupa
+  // unos sesenta pixeles en una captura de pantalla completa: ahi no se
+  // distingue si esta puesta, si esta hundida en la mesa o si no se dibuja.
+  await profe.screenshot({
+    path: resolve(shots, "7b-pieza-de-cerca.png"),
+    clip: { x: pieza.x - 130, y: pieza.y - 130, width: 260, height: 260 },
+  });
+  // El tablero esta a 0,76 y el cubo mide 0,18: apoyado, su centro va a 0,85.
+  if (Math.abs(pieza.world.y - 0.85) > 0.02) {
+    throw new Error(`no esta sobre el tablero: y=${pieza.world.y.toFixed(3)}`);
+  }
+  if (!pieza.visible || !pieza.attached) {
+    throw new Error("la malla de la pieza no esta viva en la escena");
+  }
+  if (pieza.size < 0.01) throw new Error(`la geometria es degenerada: ${pieza.size}`);
+  // Un NaN en el estado -un giro que el servidor nunca asigno, por ejemplo-
+  // llena de NaN la matriz del objeto. La pieza sigue en la escena, en su
+  // sitio, con su malla, y three la dibuja en cada cuadro sin pintar un solo
+  // pixel. Ninguna otra comprobacion de aqui lo nota.
+  if (!pieza.finite) throw new Error("la matriz de la pieza tiene valores que no son numeros");
+});
+
+// --- abrir el salon -----------------------------------------------------
+await paso("revisar y comenzar la sesion", async () => {
+  await pulsarWidget("open-preview");
+  await esperar(600);
+  await capturar("8-vista-previa");
+  // El PIN vive en el estado de la sala, no en el navegador del profesor:
+  // que aparezca aqui prueba que el salon nacio sabiendolo.
+  const salonSabeSuPin = await profe.evaluate(() => {
+    const probe = window.__aulaWidgets?.();
+    return Boolean(probe && probe["preview-start"]);
+  });
+  if (!salonSabeSuPin) throw new Error("la vista previa no se abrio");
+  await pulsarWidget("preview-start");
+  // Al abrir, los paneles del editor desaparecen.
+  await profe.waitForFunction(
+    () => {
+      const probe = window.__aulaWidgets?.();
+      return probe && Object.keys(probe).length === 0;
+    },
+    { timeout: 10000, polling: 300 },
+  );
+});
+await capturar("9-salon-abierto");
 
 // ========================================================================
 // Estudiante con camara: verifica el camino que mas se ha roto, MediaPipe
@@ -219,6 +370,7 @@ console.log("\nEstudiante con camara");
 const alumno = await browser.newPage();
 await alumno.setViewport({ width: 1280, height: 800 });
 vigilar(alumno, "alumno");
+pagActual = alumno;
 
 await paso("entrar con el PIN", async () => {
   await browser
@@ -251,7 +403,16 @@ await paso("el detector de manos arranca", async () => {
   console.log(`\n     deteccion de manos a ${fps} fps`);
   process.stdout.write("  ");
 });
-await alumno.screenshot({ path: resolve(shots, "7-estudiante-camara.png") });
+await alumno.screenshot({ path: resolve(shots, "10-estudiante-camara.png") });
+
+await paso("el estudiante ve la escena que armo el profesor", async () => {
+  const visto = await alumno.evaluate(
+    () => document.querySelector(".hud-top")?.textContent ?? "",
+  );
+  if (!visto.includes("Mantenimiento")) {
+    throw new Error(`el HUD no muestra el nombre del salon: "${visto}"`);
+  }
+});
 
 await paso("los dos se ven en la sala", async () => {
   await profe.waitForFunction(
@@ -259,7 +420,7 @@ await paso("los dos se ven en la sala", async () => {
     { timeout: 15000 },
   );
 });
-await capturar("8-dos-participantes");
+await capturar("11-dos-participantes");
 
 await browser.close();
 

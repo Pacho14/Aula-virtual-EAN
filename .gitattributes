@@ -1,0 +1,9 @@
+# Los entornos 360 son binarios, y su cabecera es texto ASCII.
+#
+# Git acierta al detectarlos, pero con core.autocrlf activo -que es lo normal en
+# Windows- esa detección es una heurística sobre los primeros kilobytes. Si
+# alguna vez fallara, convertiría saltos de línea dentro de los datos RLE y el
+# archivo quedaría corrupto sin que nadie lo note hasta abrir la sala. Mejor
+# decirlo y no depender de que adivine.
+*.hdr binary
+*.png binary

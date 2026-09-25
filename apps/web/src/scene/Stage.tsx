@@ -1,11 +1,13 @@
 import { Canvas } from "@react-three/fiber";
-import { useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { NoToneMapping } from "three";
 import type { InputLayer } from "../input/inputLayer";
-import type { Scene } from "../net/api";
+import type { Environment, Scene } from "../net/api";
 import type { AulaRoom } from "../net/room";
 import type { Voice } from "../net/voice";
+import { Editor } from "../ui3d/Editor";
 import { Avatars } from "./Avatars";
+import { Environment360, type EnvStatus } from "./Environment360";
 import { LocalPlayer, type HudSnapshot } from "./LocalPlayer";
 import { SceneObjects } from "./SceneObjects";
 import { WhiteRoom } from "./WhiteRoom";
@@ -16,6 +18,9 @@ export function Stage({
   scene,
   playerIds,
   objectIds,
+  envId,
+  editing,
+  catalog,
   input,
   voice,
   onHud,
@@ -25,12 +30,22 @@ export function Stage({
   scene: Scene;
   playerIds: string[];
   objectIds: string[];
+  /** Entorno 360 en uso. "" es la habitación en blanco. */
+  envId: string;
+  /** Cierto solo para el profesor y solo mientras arma la escena. */
+  editing: boolean;
+  catalog: Environment[];
   input: InputLayer;
   voice: Voice | null;
   onHud: (snapshot: HudSnapshot) => void;
 }) {
   const hoveredRef = useRef<string | null>(null);
   const mySpotId = room.state.players.get(sessionId)?.spotId ?? "";
+  const [envStatus, setEnvStatus] = useState<EnvStatus>({ state: "idle" });
+
+  // Se pasa por referencia estable: el efecto que carga la HDRI depende de
+  // esta función, y una nueva en cada render la volvería a descargar.
+  const onEnvStatus = useCallback((status: EnvStatus) => setEnvStatus(status), []);
 
   return (
     <Canvas
@@ -40,19 +55,29 @@ export function Stage({
       gl={{
         antialias: true,
         powerPreference: "high-performance",
-        // Sin esto R3F aplica ACES por defecto y la habitacion blanca se ve
-        // gris sucia: justo lo que el entorno no debe ser.
+        // Sin entorno 360 no hay mapeo de tonos: con ACES por defecto la
+        // habitacion blanca se ve gris sucia, justo lo que no debe ser. Al
+        // elegir un entorno, Environment360 lo enciende.
         toneMapping: NoToneMapping,
       }}
       camera={{ fov: 62, near: 0.05, far: 60 }}
     >
       <color attach="background" args={["#EDF1F1"]} />
 
+      <Environment360
+        room={room}
+        envId={envId}
+        catalog={catalog}
+        onStatus={onEnvStatus}
+      />
+
       <WhiteRoom
         halfSize={scene.bounds.halfSize}
-        height={scene.bounds.height}
         spots={scene.spots}
         mySpotId={mySpotId}
+        placement={scene.placement.floor}
+        showPlacement={editing}
+        lit={envId === ""}
       />
 
       <SceneObjects
@@ -68,6 +93,17 @@ export function Stage({
         sessionId={sessionId}
         onHeadPosition={(voiceId, x, y, z) => voice?.setSpeakerPosition(voiceId, x, y, z)}
       />
+
+      {editing && (
+        <Editor
+          room={room}
+          sessionId={sessionId}
+          scene={scene}
+          catalog={catalog}
+          envStatus={envStatus}
+          objectIds={objectIds}
+        />
+      )}
 
       <LocalPlayer
         room={room}

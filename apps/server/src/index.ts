@@ -12,8 +12,9 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { AccessToken } from "livekit-server-sdk";
 
 import { AulaRoom } from "./AulaRoom";
-import { FASE1_SCENE } from "./scene";
-import { createSession, findSession, issueTicket, listSessions } from "./tickets";
+import { listEnvironments } from "./environments";
+import { clampStudents, makeScene } from "./scene";
+import { createSession, findSession, issueTicket, listSessions, reservePin } from "./tickets";
 
 const PORT = Number(process.env.PORT ?? 2567);
 const DEV_ORIGIN = process.env.DEV_ORIGIN ?? "http://localhost:5173";
@@ -68,19 +69,35 @@ app.use(express.json({ limit: "64kb" }));
 // --------------------------------------------------------------------------
 // Limite de intentos por IP sobre el PIN (seccion 13 del documento).
 // --------------------------------------------------------------------------
+//
+// Cuentan los intentos FALLIDOS, no las peticiones. Contar peticiones deja
+// fuera a gente que no hizo nada malo: un salon entero comparte la IP del
+// campus, y quien llega antes de que el profesor abra la sala reintenta cada
+// pocos segundos hasta que abre. Con veinte peticiones por ventana, la clase
+// se quedaba fuera antes de empezar. El PIN por fuerza bruta, que es de lo
+// que protege esto, sigue tropezando al vigesimo error.
 const attempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 20;
 const WINDOW_MS = 5 * 60 * 1000;
 
-function tooManyAttempts(ip: string) {
+function isBlocked(ip: string) {
+  const entry = attempts.get(ip);
+  if (!entry) return false;
+  if (entry.resetAt < Date.now()) {
+    attempts.delete(ip);
+    return false;
+  }
+  return entry.count >= MAX_ATTEMPTS;
+}
+
+function countFailure(ip: string) {
   const now = Date.now();
   const entry = attempts.get(ip);
   if (!entry || entry.resetAt < now) {
     attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
-    return false;
+    return;
   }
   entry.count += 1;
-  return entry.count > MAX_ATTEMPTS;
 }
 
 // --------------------------------------------------------------------------
@@ -92,28 +109,51 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     voice: voiceEnabled ? "livekit" : "desactivada",
     sessions: listSessions().length,
+    environments: listEnvironments().length,
   });
+});
+
+/**
+ * Catalogo de entornos 360 para el carrusel.
+ *
+ * Solo las miniaturas se descargan al abrirlo; la HDRI completa -1,5 MB- baja
+ * unicamente cuando el profesor elige uno.
+ */
+app.get("/api/environments", (_req, res) => {
+  res.json(listEnvironments());
 });
 
 /** Solo el profesor publica salones, y para eso necesita el codigo. */
 app.post("/api/sessions", async (req, res) => {
   const ip = req.ip ?? "desconocida";
-  if (tooManyAttempts(ip)) {
+  if (isBlocked(ip)) {
     res.status(429).json({ error: "Demasiados intentos. Espera unos minutos." });
     return;
   }
 
   if (!matchesTeacherCode(String(req.body?.code ?? ""))) {
+    countFailure(ip);
     res.status(401).json({ error: "Código de profesor incorrecto." });
     return;
   }
 
   try {
-    const room = await matchMaker.createRoom("aula", { scene: FASE1_SCENE });
-    const session = createSession(room.roomId);
+    // El salon ya no es siempre el mismo: el nombre y cuanta gente cabe son
+    // lo primero que el profesor decide, y de ahi salen los puestos.
+    const scene = makeScene({
+      roomName: String(req.body?.roomName ?? ""),
+      students: clampStudents(req.body?.students),
+    });
+    // El PIN se aparta antes de crear la sala: el salon lo lleva en su estado
+    // porque la vista previa del profesor lo muestra dentro de la escena.
+    const pin = reservePin();
+    const room = await matchMaker.createRoom("aula", { scene, pin });
+    const session = createSession(pin, room.roomId, scene);
     res.json({
       pin: session.pin,
       roomId: room.roomId,
+      roomName: scene.roomName,
+      students: scene.students,
       // Esta es la credencial que convierte a quien la tenga en el profesor
       // de ESTE salon. No se deriva del PIN a proposito: el PIN se reparte.
       hostToken: session.hostToken,
@@ -136,7 +176,7 @@ function matchesTeacherCode(candidate: string) {
 /** Un participante entra con PIN y alias. */
 app.post("/api/join", async (req, res) => {
   const ip = req.ip ?? "desconocida";
-  if (tooManyAttempts(ip)) {
+  if (isBlocked(ip)) {
     res.status(429).json({ error: "Demasiados intentos. Espera unos minutos." });
     return;
   }
@@ -156,6 +196,8 @@ app.post("/api/join", async (req, res) => {
 
   const session = findSession(pin);
   if (!session) {
+    // Este si es un intento fallido de adivinar un PIN.
+    countFailure(ip);
     res.status(404).json({ error: "Ese PIN no corresponde a ningún salón activo." });
     return;
   }
@@ -173,6 +215,18 @@ app.post("/api/join", async (req, res) => {
   const role: "teacher" | "student" =
     hostToken && hostToken === session.hostToken ? "teacher" : "student";
 
+  // El profesor arma la escena a solas. Un estudiante que llega antes no se
+  // queda fuera: recibe un 409 y su pantalla lo vuelve a intentar sola.
+  const phase = (alive[0]?.metadata as { phase?: string } | undefined)?.phase ?? "live";
+  if (phase === "editing" && role !== "teacher") {
+    res.status(409).json({
+      error: "El profesor todavía está preparando el salón.",
+      waiting: true,
+      roomName: session.scene.roomName,
+    });
+    return;
+  }
+
   const { id: ticket, voiceId } = issueTicket(session.roomId, alias, role);
 
   res.json({
@@ -181,7 +235,7 @@ app.post("/api/join", async (req, res) => {
     voiceId,
     alias,
     role,
-    scene: FASE1_SCENE,
+    scene: session.scene,
     voice: voiceEnabled
       ? {
           url: LIVEKIT_URL,

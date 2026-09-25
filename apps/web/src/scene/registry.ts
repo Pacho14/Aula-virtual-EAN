@@ -23,3 +23,38 @@ export function registerGrabbable(id: string, object: Object3D | null) {
   if (object) grabbables.set(id, object);
   else grabbables.delete(id);
 }
+
+/**
+ * Pieza que acaba de salir del panel de objetos y hay que tomar sin soltar.
+ *
+ * Sacar una pieza y agarrarla son un solo gesto para quien lo hace: se elige
+ * el cubo y se lleva a la mesa. Si hubiera que elegirlo, buscarlo sobre el
+ * tablero y volver a cerrar el puño, el panel se sentiría como un formulario.
+ * El servidor confirma el id al crearla y la escena la engancha a la mano.
+ */
+export const autoGrab = {
+  id: null as string | null,
+  /**
+   * Cuándo se pidió. El aviso del servidor y el estado con la pieza dentro
+   * son dos caminos distintos: el mensaje llega al instante y el estado en el
+   * siguiente tick, hasta 50 ms después. Intentarlo una sola vez fallaba una
+   * de cada tantas veces, así que se reintenta durante esta ventana.
+   */
+  since: 0,
+};
+
+/** Cuánto se sigue intentando enganchar la pieza recién creada. */
+export const AUTO_GRAB_WINDOW_MS = 1500;
+
+/**
+ * Giro y altura del entorno mientras el profesor arrastra los deslizadores.
+ *
+ * El servidor sigue siendo la autoridad, pero su eco tarda un tick: sin esto,
+ * el paisaje se mueve medio palmo por detrás de la mano y el deslizador se
+ * siente pegajoso. En null cuando nadie los está tocando.
+ */
+export const envPredicted = {
+  yaw: null as number | null,
+  pitch: null as number | null,
+  height: null as number | null,
+};
