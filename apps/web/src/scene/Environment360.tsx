@@ -17,6 +17,8 @@ import {
   ACESFilmicToneMapping,
   BackSide,
   EquirectangularReflectionMapping,
+  LinearFilter,
+  LinearMipmapLinearFilter,
   NoToneMapping,
   type Group,
   type Texture,
@@ -81,6 +83,13 @@ export function Environment360({
           return;
         }
         loaded.mapping = EquirectangularReflectionMapping;
+        // Sin esto three deja el filtrado por defecto para una textura
+        // Half/FloatType: sin mipmaps ni anisotropia, la esfera se ve
+        // pixelada en los angulos oblicuos aunque la fuente sea nitida.
+        loaded.generateMipmaps = true;
+        loaded.minFilter = LinearMipmapLinearFilter;
+        loaded.magFilter = LinearFilter;
+        loaded.anisotropy = gl.capabilities.getMaxAnisotropy();
         setTexture(loaded);
         onStatus({ state: "ready", id: envId });
       },

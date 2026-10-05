@@ -12,6 +12,13 @@ import { LocalPlayer, type HudSnapshot } from "./LocalPlayer";
 import { SceneObjects } from "./SceneObjects";
 import { WhiteRoom } from "./WhiteRoom";
 
+/**
+ * Gama baja: menos nucleos de los que tiene hasta un celular modesto de hoy.
+ * Ahi el dpr alto y el antialiasing son lo primero que tumba los 30 fps, y
+ * ninguno de los dos se nota tanto como el framerate en una pantalla chica.
+ */
+const LOW_END = typeof navigator !== "undefined" && navigator.hardwareConcurrency > 0 && navigator.hardwareConcurrency <= 4;
+
 export function Stage({
   room,
   sessionId,
@@ -51,9 +58,9 @@ export function Stage({
     <Canvas
       // Presupuesto de la seccion 13: en celular de gama media el dpr alto es
       // lo primero que tumba los 30 fps.
-      dpr={[1, 1.5]}
+      dpr={LOW_END ? [1, 1] : [1, 1.5]}
       gl={{
-        antialias: true,
+        antialias: !LOW_END,
         powerPreference: "high-performance",
         // Sin entorno 360 no hay mapeo de tonos: con ACES por defecto la
         // habitacion blanca se ve gris sucia, justo lo que no debe ser. Al

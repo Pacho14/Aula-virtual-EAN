@@ -9,9 +9,11 @@ import {
   snapToPlacement,
   type PrimitiveName,
   type Scene,
+  type SceneSpot,
 } from "./scene";
 import { isKnownEnvironment } from "./environments";
 import { consumeTicket, markLive, removeSessionByRoomId, type Ticket } from "./tickets";
+import { setCanPublish } from "./voiceAdmin";
 
 /**
  * Mensaje de pose. Se envia como arreglo plano de numeros para no pagar
@@ -57,6 +59,8 @@ export class AulaRoom extends Room<{ state: AulaState }> {
   private emptyMinutes = 0;
   /** Numeracion de las piezas que saca el profesor. No se reutiliza. */
   private spawnCursor = 0;
+  /** Numeracion de quien pide la palabra: asi el panel del profesor los ordena por quien la pidio primero, no por quien entro primero al salon. */
+  private raiseCursor = 0;
 
   override onCreate(options: { pin?: string; scene?: Scene }) {
     if (options.scene) this.scene = options.scene;
@@ -118,12 +122,41 @@ export class AulaRoom extends Room<{ state: AulaState }> {
 
     this.onMessage("raiseHand", (client, message: { v?: boolean }) => {
       const player = this.state.players.get(client.sessionId);
-      if (player) player.handRaised = Boolean(message?.v);
+      if (!player) return;
+      const next = Boolean(message?.v);
+      if (next === player.handRaised) return;
+      player.handRaised = next;
+      player.raiseOrder = next ? ++this.raiseCursor : 0;
     });
 
     this.onMessage("speaking", (client, message: { v?: boolean }) => {
       const player = this.state.players.get(client.sessionId);
       if (player) player.speaking = Boolean(message?.v);
+    });
+
+    // --- voz: cada quien reporta su propio mic, el profesor puede forzarlo -
+
+    this.onMessage("mic", (client, message: { v?: boolean }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+      // Silenciado por el profesor: no se reactiva solo, ni aunque su propio
+      // cliente crea que puede.
+      if (player.teacherMuted && message?.v) return;
+      player.micOn = Boolean(message?.v);
+    });
+
+    this.onMessage("muteStudent", async (client, message: { sessionId?: string; v?: boolean }) => {
+      if (!this.isTeacher(client.sessionId)) return;
+      const sessionId = String(message?.sessionId ?? "");
+      const target = this.state.players.get(sessionId);
+      if (!target) return;
+
+      const muted = Boolean(message?.v);
+      target.teacherMuted = muted;
+      if (muted) target.micOn = false;
+
+      await setCanPublish(this.roomId, target.voiceId, !muted);
+      this.clients.get(sessionId)?.send("forceMute", { v: muted });
     });
 
     // --- editor de escena: solo el profesor, y solo antes de empezar -------
@@ -252,12 +285,22 @@ export class AulaRoom extends Room<{ state: AulaState }> {
     player.pitch = aim.pitch;
 
     this.state.players.set(client.sessionId, player);
+
+    // Una mesa propia por estudiante, aparte de la del profesor. No lleva
+    // piezas todavia: es solo para que cada quien vea cual es la suya.
+    if (ticket.role === "student") {
+      this.state.objects.set(
+        studentTableId(spot.id),
+        makeStudentTable(spot, player.color, player.alias),
+      );
+    }
   }
 
   override onLeave(client: Client) {
     const player = this.state.players.get(client.sessionId);
     if (player) {
       this.occupancy.get(player.spotId)?.delete(client.sessionId);
+      this.state.objects.delete(studentTableId(player.spotId));
     }
     // Soltar todo lo que tuviera agarrado, o quedaria bloqueado para siempre.
     this.state.objects.forEach((obj: SceneObject) => {
@@ -422,6 +465,38 @@ export class AulaRoom extends Room<{ state: AulaState }> {
     obj.y = placed.y;
     obj.z = placed.z;
   }
+}
+
+function studentTableId(spotId: string) {
+  return `mesa-${spotId}`;
+}
+
+/**
+ * La mesa de un estudiante. Aparte de la del profesor: se crea al entrar y
+ * se borra al salir, no es parte fija del salon.
+ *
+ * Sin piezas encima todavia -no hay zona de colocacion propia por mesa-, asi
+ * que no es interactiva: es solo para que cada quien reconozca la suya por
+ * el color de su propio avatar.
+ */
+function makeStudentTable(spot: SceneSpot, color: string, alias: string): SceneObject {
+  const table = new SceneObject();
+  table.src = "prim:box";
+  // El cliente la usa para un rotulo flotante: ver cual es la suya no puede
+  // depender solo del color, que a distancia o con mala luz cuesta distinguir.
+  table.label = `Mesa de ${alias || "?"}`;
+  table.color = color;
+  table.sx = 0.8;
+  table.sy = 0.62;
+  table.sz = 0.6;
+  // Entre el puesto y el centro de la sala: delante del estudiante, sin
+  // pisar ni su puesto ni la mesa del profesor.
+  table.x = spot.pos[0] * 0.7;
+  table.y = table.sy / 2;
+  table.z = spot.pos[2] * 0.7;
+  table.interactive = false;
+  table.locked = true;
+  return table;
 }
 
 function clamp(value: number, min: number, max: number) {

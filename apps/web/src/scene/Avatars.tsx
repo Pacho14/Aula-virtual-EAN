@@ -67,6 +67,7 @@ function Avatar({
   const headRef = useRef<Group>(null);
   const plateRef = useRef<Sprite>(null);
   const ringRef = useRef<Mesh>(null);
+  const handIconRef = useRef<Sprite>(null);
   const leftUpper = useRef<Mesh>(null);
   const rightUpper = useRef<Mesh>(null);
   const leftArm = useRef<Mesh>(null);
@@ -78,6 +79,7 @@ function Avatar({
   const alias = player?.alias ?? "";
   const color = player?.color ?? "#0B6E67";
   const plateTexture = useMemo(() => makeNameplate(alias, color), [alias, color]);
+  const handIconTexture = useMemo(() => makeHandIcon(color), [color]);
 
   useFrame((_, delta) => {
     const p = room.state.players.get(id);
@@ -98,6 +100,15 @@ function Avatar({
       // El rotulo se atenua con la distancia en vez de desaparecer de golpe.
       const material = plateRef.current.material;
       material.opacity = p.handRaised ? 1 : 0.88;
+    }
+
+    if (handIconRef.current) {
+      handIconRef.current.visible = p.handRaised;
+      // Un pequeno balanceo es lo que hace que un icono fijo se note sin ser
+      // invasivo: la opacidad sutil del rotulo no bastaba para que el
+      // profesor la viera de reojo desde el otro lado del salon.
+      const bob = p.handRaised ? Math.sin(performance.now() / 300) * 0.03 : 0;
+      handIconRef.current.position.set(tmpHead.x, tmpHead.y + 0.56 + bob, tmpHead.z);
     }
 
     if (ringRef.current) {
@@ -135,6 +146,10 @@ function Avatar({
 
       <sprite ref={plateRef} scale={[0.62, 0.155, 1]}>
         <spriteMaterial map={plateTexture} transparent depthWrite={false} />
+      </sprite>
+
+      <sprite ref={handIconRef} scale={[0.16, 0.16, 1]} visible={false}>
+        <spriteMaterial map={handIconTexture} transparent depthWrite={false} />
       </sprite>
 
       <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]}>
@@ -294,6 +309,51 @@ function makeNameplate(alias: string, color: string) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(alias.slice(0, 16) || "?", width / 2, height / 2 + 2);
+
+  const texture = new CanvasTexture(canvas);
+  texture.minFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/**
+ * Insignia de "mano levantada" sobre la cabeza del avatar.
+ *
+ * Dibujada a mano, como el rotulo, y no con un emoji: el glifo de un emoji
+ * depende de la fuente del sistema y no siempre existe o se ve igual en
+ * todos los dispositivos.
+ */
+function makeHandIcon(color: string) {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+
+  const cx = size / 2;
+  const cy = size / 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, size / 2 - 4, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(16, 26, 27, 0.88)";
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+
+  ctx.fillStyle = "#F2F6F6";
+  // Palma.
+  roundedRect(ctx, cx - 22, cy - 6, 44, 38, 10);
+  ctx.fill();
+  // Cuatro dedos, mas cortos de afuera hacia adentro como una mano abierta.
+  const fingers = [-24, -11, 2, 15];
+  const heights = [28, 34, 32, 26];
+  fingers.forEach((dx, i) => {
+    roundedRect(ctx, cx + dx, cy - 6 - heights[i]!, 10, heights[i]! + 10, 5);
+    ctx.fill();
+  });
+  // Pulgar, hacia el lado.
+  roundedRect(ctx, cx - 34, cy + 6, 16, 20, 6);
+  ctx.fill();
 
   const texture = new CanvasTexture(canvas);
   texture.minFilter = LinearFilter;

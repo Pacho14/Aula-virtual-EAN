@@ -24,7 +24,10 @@ export interface PlayerView {
   spotId: string;
   voiceId: string;
   handRaised: boolean;
+  raiseOrder: number;
   speaking: boolean;
+  micOn: boolean;
+  teacherMuted: boolean;
   hx: number;
   hy: number;
   hz: number;

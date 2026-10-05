@@ -4,26 +4,26 @@
     "label": "Balcony",
     "file": "/hdri/balcony.hdr",
     "thumb": "/hdri/balcony.png",
-    "width": 1024,
-    "height": 512,
-    "bytes": 1735462
+    "width": 1536,
+    "height": 768,
+    "bytes": 3870672
   },
   {
     "id": "veranda",
     "label": "Veranda",
     "file": "/hdri/veranda.hdr",
     "thumb": "/hdri/veranda.png",
-    "width": 1024,
-    "height": 512,
-    "bytes": 1728485
+    "width": 1536,
+    "height": 768,
+    "bytes": 3856318
   },
   {
     "id": "vignaioli",
     "label": "Vignaioli",
     "file": "/hdri/vignaioli.hdr",
     "thumb": "/hdri/vignaioli.png",
-    "width": 1024,
-    "height": 512,
-    "bytes": 1630970
+    "width": 1536,
+    "height": 768,
+    "bytes": 3615116
   }
 ]

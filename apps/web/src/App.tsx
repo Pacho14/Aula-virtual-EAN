@@ -15,7 +15,9 @@ import { LobbyStage } from "./scene/LobbyStage";
 import { Stage } from "./scene/Stage";
 import type { HudSnapshot } from "./scene/LocalPlayer";
 import { CameraControls } from "./ui/CameraControls";
+import { HandQueue } from "./ui/HandQueue";
 import { Hud } from "./ui/Hud";
+import { VoicePanel } from "./ui/VoicePanel";
 import { JoinScreen, type InputMode } from "./ui/JoinScreen";
 import { LandmarkOverlay } from "./ui/LandmarkOverlay";
 
@@ -58,7 +60,8 @@ export default function App() {
 
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [mode, setMode] = useState<InputMode>("camera");
-  const [showLandmarks, setShowLandmarks] = useState(false);
+  const [showLandmarks, setShowLandmarks] = useState(true);
+  const [landmarksExpanded, setLandmarksExpanded] = useState(false);
 
   const [handle, setHandle] = useState<RoomHandle | null>(null);
   const [scene, setScene] = useState<Scene | null>(null);
@@ -88,6 +91,18 @@ export default function App() {
   const voiceRef = useRef<Voice | null>(null);
   const hudRef = useRef<HudSnapshot>(EMPTY_HUD);
   const [hud, setHud] = useState<HudSnapshot>(EMPTY_HUD);
+
+  // El profesor fuerza el silencio desde fuera: el servidor ya se lo aplicó
+  // en LiveKit, esto solo pone al día el micrófono local y el HUD.
+  useEffect(() => {
+    if (!handle) return;
+    const off = handle.room.onMessage("forceMute", (message: { v?: boolean }) => {
+      const muted = Boolean(message?.v);
+      void voiceRef.current?.setMicrophone(!muted);
+      setMicOn(!muted);
+    });
+    return () => off?.();
+  }, [handle]);
 
   // El catálogo son tres líneas de JSON: se pide al abrir la aplicación para
   // que el carrusel del profesor no tenga que esperarlo dentro de la sala.
@@ -140,14 +155,20 @@ export default function App() {
       return null;
     }
     try {
-      await inputRef.current.useCamera({ onStatus: setStatus, targetFps: 24 });
+      // No es un objetivo sino un techo: quien marca el ritmo real es el
+      // detector, que pide el siguiente cuadro apenas termina el anterior.
+      await inputRef.current.useCamera({ onStatus: setStatus, targetFps: 60 });
       return null;
     } catch (problem) {
       // Que falle la cámara no puede dejar a nadie fuera: se entra con mouse y
       // se avisa. Es el modo de respaldo que pide la sección 10 del documento.
       console.warn("[entrada] la cámara no arrancó:", problem);
       await inputRef.current.useMouse();
-      return "No se pudo iniciar el seguimiento de manos. Entraste con mouse o toque.";
+      // Sin esto, "mode" se queda en "camera" aunque ya se haya caído a
+      // mouse: la interfaz sigue hablando de gestos y de pellizco, y los
+      // controles de cámara siguen en pantalla, como si hubiera camara.
+      setMode("mouse");
+      return cameraFailureNotice(problem);
     }
   }, []);
 
@@ -394,10 +415,17 @@ export default function App() {
         <CameraControls
           input={inputRef.current}
           handTracking={handTracking}
+          // En el lobby se apunta con el dedo índice, así que el puntito de
+          // los controles tiene que señalar lo mismo que el rayo de la escena.
+          pointWithIndex
           showLandmarks={showLandmarks}
           onToggleLandmarks={setShowLandmarks}
+          landmarksExpanded={landmarksExpanded}
+          onToggleExpanded={setLandmarksExpanded}
         />
-        {handTracking && showLandmarks && <LandmarkOverlay input={inputRef.current} />}
+        {handTracking && showLandmarks && (
+          <LandmarkOverlay input={inputRef.current} expanded={landmarksExpanded} />
+        )}
       </div>
     );
   }
@@ -457,6 +485,12 @@ export default function App() {
           const next = !micOn;
           await voiceRef.current?.setMicrophone(next);
           setMicOn(next);
+          handle.room.send("mic", { v: next });
+        }}
+        onToggleHand={() => {
+          const next = !hud.handRaised;
+          inputRef.current.setHandRaised(next);
+          handle.room.send("raiseHand", { v: next });
         }}
         onLeave={leave}
         onClose={
@@ -468,17 +502,50 @@ export default function App() {
             : null
         }
       />
+      {identity?.role === "teacher" && !editing && <HandQueue room={handle.room} />}
+      {identity?.role === "teacher" && !editing && (
+        <VoicePanel room={handle.room} sessionId={handle.sessionId} isTeacher voiceOn={voiceOn} />
+      )}
       <CameraControls
         input={inputRef.current}
         handTracking={handTracking}
         showLandmarks={showLandmarks}
         onToggleLandmarks={setShowLandmarks}
+        landmarksExpanded={landmarksExpanded}
+        onToggleExpanded={setLandmarksExpanded}
       />
-      {handTracking && showLandmarks && <LandmarkOverlay input={inputRef.current} />}
+      {handTracking && showLandmarks && (
+        <LandmarkOverlay input={inputRef.current} expanded={landmarksExpanded} />
+      )}
     </div>
   );
 }
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Por qué falló la cámara, en términos que se puedan arreglar.
+ *
+ * El error más común no es de este código: es que `getUserMedia` no existe
+ * fuera de un contexto seguro (HTTPS, o `localhost`). Entrar por la IP de la
+ * red local en HTTP dispara justo este error, y "no se pudo iniciar el
+ * seguimiento de manos" no dice por qué ni qué hacer con eso.
+ */
+function cameraFailureNotice(problem: unknown): string {
+  const inseguro = typeof window !== "undefined" && window.isSecureContext === false;
+  if (inseguro || !navigator.mediaDevices) {
+    return (
+      "La cámara necesita una conexión segura: entra por https:// o desde " +
+      "\"localhost\", no por una dirección IP en http://. Entraste con mouse o toque."
+    );
+  }
+  if (problem instanceof DOMException && problem.name === "NotAllowedError") {
+    return "El navegador bloqueó el permiso de cámara. Entraste con mouse o toque.";
+  }
+  if (problem instanceof DOMException && problem.name === "NotFoundError") {
+    return "No se encontró ninguna cámara en este dispositivo. Entraste con mouse o toque.";
+  }
+  return "No se pudo iniciar el seguimiento de manos. Entraste con mouse o toque.";
 }

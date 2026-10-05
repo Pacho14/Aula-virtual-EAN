@@ -19,9 +19,28 @@ export const predicted = new Map<string, Vector3>();
  */
 export const grabbables = new Map<string, Object3D>();
 
+/**
+ * Las mismas mallas que `grabbables`, en un array.
+ *
+ * El raycast del puntero corre 60 veces por segundo y pide un array, no un
+ * Map; reconstruirlo con `[...grabbables.values()]` en cada cuadro aloja
+ * memoria sin necesidad. Este array se actualiza solo cuando algo entra o
+ * sale, no por cuadro.
+ */
+export const grabbablesList: Object3D[] = [];
+
 export function registerGrabbable(id: string, object: Object3D | null) {
-  if (object) grabbables.set(id, object);
-  else grabbables.delete(id);
+  const previous = grabbables.get(id);
+  if (previous) {
+    const index = grabbablesList.indexOf(previous);
+    if (index !== -1) grabbablesList.splice(index, 1);
+  }
+  if (object) {
+    grabbables.set(id, object);
+    grabbablesList.push(object);
+  } else {
+    grabbables.delete(id);
+  }
 }
 
 /**

@@ -1,13 +1,6 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
-import {
-  Plane,
-  Vector2,
-  Vector3,
-  type Camera,
-  type Mesh,
-  type MeshStandardMaterial,
-} from "three";
+import { Plane, Vector2, Vector3, type Camera } from "three";
 import type { InputLayer } from "../input/inputLayer";
 import { GESTURE_INDEX, type HandFrame } from "../input/types";
 import { aimAt, type Scene } from "../net/api";
@@ -17,8 +10,9 @@ import { cursorState, handRay, HandCursor } from "../ui3d/HandCursor";
 import { WidgetPointer } from "../ui3d/pointer";
 import { exposeWidgetProbe, pointer } from "../ui3d/widgets";
 import { cameraRig, nudgeRig, restRig } from "./cameraRig";
+import { HandSkeleton, type HandSkeletonHandle } from "./HandSkeleton";
 import { snapToPlacement } from "./placement";
-import { AUTO_GRAB_WINDOW_MS, autoGrab, grabbables, predicted } from "./registry";
+import { AUTO_GRAB_WINDOW_MS, autoGrab, grabbables, grabbablesList, predicted } from "./registry";
 
 export interface HudSnapshot {
   gesture: string;
@@ -87,8 +81,8 @@ export function LocalPlayer({
    * que es un gesto deliberado, o cerrar la mano y volver a abrirla.
    */
   const armed = useRef(false);
-  const leftHandRef = useRef<Mesh>(null);
-  const rightHandRef = useRef<Mesh>(null);
+  const leftHandRef = useRef<HandSkeletonHandle>(null);
+  const rightHandRef = useRef<HandSkeletonHandle>(null);
   const handWorld = useRef({
     left: new Vector3(),
     right: new Vector3(),
@@ -265,13 +259,14 @@ export function LocalPlayer({
           now,
           gesture === "fist" || gesture === "pinch",
           selectPulse.current,
+          frame.source === "camera",
         );
       }
 
       if (held.current) {
         hovered = held.current.id;
       } else if (!onWidget) {
-        const hits = handRay.intersectObjects([...grabbables.values()], false);
+        const hits = handRay.intersectObjects(grabbablesList, false);
         const hit = hits[0];
         if (hit) {
           hovered = (hit.object.userData as { objectId?: string }).objectId ?? null;
@@ -309,8 +304,8 @@ export function LocalPlayer({
     // camara: con mouse ya hay cursor del sistema, y una esfera a 55 cm de la
     // cara tapa media escena sin aportar nada.
     const showHands = frame.source === "camera";
-    updateOwnHand(leftHandRef.current, showHands ? frame.left : null, handWorld.current.left);
-    updateOwnHand(rightHandRef.current, showHands ? frame.right : null, handWorld.current.right);
+    updateOwnHand(leftHandRef.current, showHands ? frame.left : null, handWorld.current.left, camera);
+    updateOwnHand(rightHandRef.current, showHands ? frame.right : null, handWorld.current.right, camera);
 
     // Confirmacion del agarre: el servidor es quien lo concede.
     if (pending.current) {
@@ -428,14 +423,8 @@ export function LocalPlayer({
   return (
     <group>
       <HandCursor />
-      <mesh ref={leftHandRef} visible={false}>
-        <sphereGeometry args={[0.045, 12, 10]} />
-        <meshStandardMaterial color="#0B6E67" roughness={0.5} />
-      </mesh>
-      <mesh ref={rightHandRef} visible={false}>
-        <sphereGeometry args={[0.045, 12, 10]} />
-        <meshStandardMaterial color="#0B6E67" roughness={0.5} />
-      </mesh>
+      <HandSkeleton ref={leftHandRef} />
+      <HandSkeleton ref={rightHandRef} />
     </group>
   );
 }
@@ -449,19 +438,15 @@ const HAND_COLORS: Record<string, string> = {
   open: "#5C7A1E",
 };
 
-function updateOwnHand(mesh: Mesh | null, hand: HandFrame | null, world: Vector3) {
-  if (!mesh) return;
-  if (!hand) {
-    mesh.visible = false;
-    return;
-  }
-  mesh.visible = true;
-  mesh.position.lerp(world, 0.5);
-  const material = mesh.material as MeshStandardMaterial;
-  material.color.set(HAND_COLORS[hand.gesture] ?? HAND_COLORS.none!);
-  // El puno se dibuja un poco mas pequeno, como una mano cerrada.
-  const scale = hand.gesture === "fist" ? 0.8 : 1;
-  mesh.scale.setScalar(scale);
+function updateOwnHand(
+  skeleton: HandSkeletonHandle | null,
+  hand: HandFrame | null,
+  world: Vector3,
+  camera: Camera,
+) {
+  if (!skeleton) return;
+  const color = hand ? (HAND_COLORS[hand.gesture] ?? HAND_COLORS.none!) : HAND_COLORS.none!;
+  skeleton.update(hand, world, camera, color);
 }
 
 function projectHand(hand: HandFrame, camera: Camera, out: Vector3) {

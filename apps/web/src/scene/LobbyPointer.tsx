@@ -93,13 +93,19 @@ export function LobbyPointer({
       return;
     }
 
-    ndc.set(hand.ndcX, hand.ndcY);
+    // Aqui se apunta con la punta del indice, no con el centro de la palma:
+    // señalar un portal con el dedo es el gesto que la gente hace sola, y en
+    // el lobby no hay nada que agarrar, asi que no importa que la punta se
+    // desplace al cerrar la mano. Dentro del salon manda la palma, que es lo
+    // que no hace saltar la pieza en el instante de tomarla.
+    ndc.set(hand.indexNdcX, hand.indexNdcY);
     handRay.setFromCamera(ndc, camera);
     const onWidget = widgetPointer.current.update(
       handRay,
       now,
       hand.gesture === "fist" || hand.gesture === "pinch",
       selectPulse.current,
+      frame.source === "camera",
     );
     selectPulse.current = false;
 

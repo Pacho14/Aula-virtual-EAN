@@ -33,6 +33,11 @@ export class InputLayer {
     return this.source?.kind ?? "mouse";
   }
 
+  /** El <video> de la camara activa, o null si la fuente es mouse/toque. */
+  get activeVideo(): HTMLVideoElement | null {
+    return this.source instanceof CameraSource ? this.source.videoElement : null;
+  }
+
   /**
    * El ultimo cuadro, sin avanzar nada.
    *
@@ -70,6 +75,20 @@ export class InputLayer {
   stop() {
     this.source?.stop();
     this.source = null;
+  }
+
+  /**
+   * Fija el estado de "mano levantada" desde fuera (un boton del HUD).
+   *
+   * En modo mouse/toque el gesto nunca llega a sostenerse (ver mouseSource,
+   * que vuelve a "point" a los 80 ms), asi que este es el unico camino para
+   * levantar la mano en ese modo. Tambien reinicia el contador del gesto
+   * sostenido para que, en modo camara, una mano que ya estaba arriba no
+   * vuelva a emitir el mismo estado en el cuadro siguiente.
+   */
+  setHandRaised(value: boolean) {
+    this.handRaised = value;
+    this.raiseSince = 0;
   }
 
   /**

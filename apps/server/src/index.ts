@@ -21,11 +21,21 @@ import {
   findSessionBySalon,
   issueTicket,
   listSessions,
+  removeSessionByRoomId,
   reservePin,
 } from "./tickets";
 
 const PORT = Number(process.env.PORT ?? 2567);
 const DEV_ORIGIN = process.env.DEV_ORIGIN ?? "http://localhost:5173";
+
+/**
+ * Cuanto se espera antes de considerar "abandonado" un salon vacio.
+ *
+ * Tiene que ser mayor que el tiempo normal entre crear la sesion y que el
+ * WebSocket del profesor conecte -carga de la pagina incluida-, o un salon
+ * recien creado se reclamaria a si mismo con la siguiente peticion.
+ */
+const RECLAIM_GRACE_MS = 20_000;
 
 /**
  * Codigo que habilita a crear salones. Solo el profesor lo tiene.
@@ -206,12 +216,27 @@ app.post("/api/sessions", async (req, res) => {
   const ocupado = findSessionBySalon(salon);
   if (ocupado) {
     const vivas = await matchMaker.query({ roomId: ocupado.roomId });
-    if (vivas.length > 0) {
+    const activa = vivas[0];
+    const reciente = Date.now() - ocupado.createdAt < RECLAIM_GRACE_MS;
+    if (activa && (activa.clients > 0 || reciente)) {
+      // `clients === 0` no basta por si solo: un salon recien creado tambien
+      // pasa por ahi medio segundo, mientras el profesor todavia esta
+      // cargando la pagina y su WebSocket no ha llegado. Sin el plazo, crear
+      // un salon y repetir la peticion de inmediato -como hace la prueba de
+      // humo- se lo quitaria a si mismo.
       res.status(409).json({
         error: `El salón ${salon} ya tiene una clase abierta: ${ocupado.scene.roomName}.`,
       });
       return;
     }
+    // La sala sigue viva pero sin nadie dentro desde hace rato: nadie pulsó
+    // "Cerrar la clase", pero tampoco hay a quien molestar. Reinscribir aquí
+    // la cierra sola, en vez de obligar a esperar los 45 minutos del
+    // temporizador de limpieza para poder abrir una clase nueva en este salón.
+    if (activa) {
+      await matchMaker.remoteRoomCall(ocupado.roomId, "disconnect").catch(() => {});
+    }
+    removeSessionByRoomId(ocupado.roomId);
   }
 
   try {
@@ -244,6 +269,44 @@ app.post("/api/sessions", async (req, res) => {
     console.error("[api] no se pudo crear la sala:", error);
     res.status(500).json({ error: "No se pudo crear el salón." });
   }
+});
+
+/**
+ * Libera un salón a la fuerza, aunque tenga gente dentro.
+ *
+ * Para el dia a dia basta con que `/api/sessions` reincorpore un salon vacio
+ * solo (arriba): esto es para cuando eso no alcanza -una clase que quedo a
+ * medias y hay que cerrar de verdad para abrir la siguiente-. Pide el mismo
+ * código de profesor que crear una clase: quien lo tiene ya administra los
+ * tres salones, no solo el que abrió.
+ */
+app.post("/api/sessions/:salon/close", async (req, res) => {
+  const ip = req.ip ?? "desconocida";
+  if (isBlocked(ip)) {
+    res.status(429).json({ error: "Demasiados intentos. Espera unos minutos." });
+    return;
+  }
+  if (!matchesTeacherCode(String(req.body?.code ?? ""))) {
+    countFailure(ip);
+    res.status(401).json({ error: "Código de profesor incorrecto." });
+    return;
+  }
+
+  const salon = Number(req.params.salon);
+  if (!isSalonId(salon)) {
+    res.status(400).json({ error: "Ese salón no existe." });
+    return;
+  }
+
+  const ocupado = findSessionBySalon(salon);
+  if (!ocupado) {
+    res.status(404).json({ error: `El salón ${salon} ya está libre.` });
+    return;
+  }
+
+  await matchMaker.remoteRoomCall(ocupado.roomId, "disconnect").catch(() => {});
+  removeSessionByRoomId(ocupado.roomId);
+  res.json({ ok: true, salon });
 });
 
 /** Comparacion en tiempo constante, para no filtrar el codigo a fuerza bruta. */

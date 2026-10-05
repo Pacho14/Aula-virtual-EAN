@@ -54,10 +54,33 @@ function lowpass(value: number, previous: number, a: number) {
   return a * value + (1 - a) * previous;
 }
 
-/** Tres filtros que comparten parametros, para un punto 2D mas la escala. */
+/**
+ * Tres filtros que comparten parametros, para un punto 2D mas la escala.
+ *
+ * Los cortes son altos a proposito. Con un minCutoff de 1 Hz -lo que habia
+ * antes- y la deteccion a ~12 Hz, `alpha` sale 0,35: cada medicion nueva solo
+ * mueve el cursor un tercio de lo que deberia, y hacen falta tres deteciones
+ * -un cuarto de segundo- para alcanzar la mano. Eso se siente exactamente
+ * como que la mano no va en tiempo real. A 3 Hz, `alpha` sube a ~0,65 y el
+ * retraso baja a una deteccion. El `beta` alto es lo que ademas suelta el
+ * filtro cuando la mano se mueve rapido, que es cuando el retraso se nota.
+ *
+ * Esto no afecta los gestos: `classify()` corre sobre los puntos en crudo
+ * dentro del worker, no sobre lo que sale de aqui.
+ */
 export class HandFilter {
-  readonly x = new OneEuroFilter(1.0, 0.035);
-  readonly y = new OneEuroFilter(1.0, 0.035);
+  readonly x = new OneEuroFilter(3.0, 0.8);
+  readonly y = new OneEuroFilter(3.0, 0.8);
+  /**
+   * La punta del indice, para apuntar en el lobby.
+   *
+   * Va aparte del centro de la palma a proposito: la punta de un dedo se
+   * mueve mucho mas que la palma -se dobla, tiembla y se desplaza al cerrar
+   * la mano-, asi que necesita su propio filtro y no puede derivarse del
+   * otro.
+   */
+  readonly ix = new OneEuroFilter(3.0, 0.8);
+  readonly iy = new OneEuroFilter(3.0, 0.8);
   // La escala se usa para la profundidad: filtrar mas duro evita que el
   // objeto agarrado se vaya y venga solo.
   readonly span = new OneEuroFilter(0.6, 0.005);
@@ -65,6 +88,8 @@ export class HandFilter {
   reset() {
     this.x.reset();
     this.y.reset();
+    this.ix.reset();
+    this.iy.reset();
     this.span.reset();
   }
 }

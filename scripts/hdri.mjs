@@ -29,8 +29,8 @@ const source = resolve(root, "HDRI");
 const destination = resolve(root, "apps/server/public/hdri");
 
 /** Tamano de trabajo. Equirectangular es siempre 2:1. */
-const OUT_W = 1024;
-const OUT_H = 512;
+const OUT_W = 1536;
+const OUT_H = 768;
 /** Miniatura del carrusel. Divisor exacto del tamano de trabajo. */
 const THUMB_W = 256;
 const THUMB_H = 128;

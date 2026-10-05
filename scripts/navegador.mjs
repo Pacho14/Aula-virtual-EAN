@@ -584,7 +584,12 @@ await paso("el deslizador horizontal gira la camara", async () => {
   process.stdout.write("  ");
 });
 
-await paso("se pueden mostrar los puntos de la mano", async () => {
+await paso("los puntos de la mano se ven por defecto", async () => {
+  // La vista de depuracion (camara + landmarks) arranca visible, sin que
+  // haya que marcar nada: es un requisito, no una opcion escondida.
+  await camara.waitForSelector(".landmarks", { timeout: 5000 });
+  await camara.click(".camctl-check input");
+  await camara.waitForFunction(() => !document.querySelector(".landmarks"), { timeout: 5000 });
   await camara.click(".camctl-check input");
   await camara.waitForSelector(".landmarks", { timeout: 5000 });
 });

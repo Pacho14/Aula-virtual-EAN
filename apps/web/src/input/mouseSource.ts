@@ -51,6 +51,13 @@ export class MouseSource implements InputSource {
     // Pulsar el boton del microfono no deberia agarrar la valvula que quedo
     // detras del HUD.
     if (isInterface(event.target)) return;
+    // Con mouse esto no hacia falta: el mouse siempre manda pointermove antes
+    // de cualquier click, asi que ndcX/ndcY ya estaban al dia. Con toque no
+    // hay hover: el primer evento de un toque puede ser este pointerdown sin
+    // un pointermove previo en esa posicion, y sin esto el rayo apuntaba a
+    // donde estuvo el toque anterior, no al que acaba de ocurrir.
+    this.ndcX = (event.clientX / window.innerWidth) * 2 - 1;
+    this.ndcY = -((event.clientY / window.innerHeight) * 2 - 1);
     this.gesture = "fist";
     this.update();
   };
@@ -73,12 +80,16 @@ export class MouseSource implements InputSource {
       handedness: "right" as const,
       ndcX: this.ndcX,
       ndcY: this.ndcY,
+      // El mouse no tiene dedos: el puntero del lobby es el mismo.
+      indexNdcX: this.ndcX,
+      indexNdcY: this.ndcY,
       rawY: (1 - this.ndcY) / 2,
       span: 0.1,
       gesture: this.gesture,
       pinch: this.gesture === "fist" ? 1 : 0,
       // El mouse no tiene dedos. Nada que dibujar en la vista de puntos.
       landmarks: null,
+      worldLandmarks: null,
     };
     this.frame = { source: "mouse", left: null, right: hand, primary: hand, detectFps: 0 };
   }

@@ -43,7 +43,13 @@ export const Player = schema(
     /** Identidad en LiveKit: enlaza esta voz con este avatar. */
     voiceId: t.string().default(""),
     handRaised: t.boolean().default(false),
+    /** Orden en que pidio la palabra: 0 es "no la ha pedido". */
+    raiseOrder: t.uint32().default(0),
     speaking: t.boolean().default(false),
+    /** Lo que el propio cliente reporta de su microfono. */
+    micOn: t.boolean().default(true),
+    /** El profesor lo forzo a silencio: mientras sea cierto, no puede reactivarse solo. */
+    teacherMuted: t.boolean().default(false),
 
     // Cabeza: posicion + yaw/pitch. Sin roll, que en la fase 1 nadie inclina
     // la cabeza (la camara vive en el punto asignado).

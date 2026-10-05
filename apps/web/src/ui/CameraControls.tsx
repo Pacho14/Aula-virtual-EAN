@@ -40,14 +40,26 @@ interface Riel {
 export function CameraControls({
   input,
   handTracking,
+  pointWithIndex = false,
   showLandmarks,
   onToggleLandmarks,
+  landmarksExpanded,
+  onToggleExpanded,
 }: {
   input: InputLayer;
   /** Con mouse no hay pellizco ni puntos que dibujar. */
   handTracking: boolean;
+  /**
+   * Apuntar con la punta del índice en vez del centro de la palma.
+   *
+   * Es lo que usa el lobby, para que el puntito de aquí señale lo mismo que
+   * el rayo de la escena. Dentro del salón manda la palma.
+   */
+  pointWithIndex?: boolean;
   showLandmarks: boolean;
   onToggleLandmarks: (value: boolean) => void;
+  landmarksExpanded: boolean;
+  onToggleExpanded: (value: boolean) => void;
 }) {
   useSyncExternalStore(subscribeRig, rigSnapshot);
   const [visible, setVisible] = useState(true);
@@ -86,8 +98,10 @@ export function CameraControls({
         return;
       }
 
-      const x = (hand.ndcX * 0.5 + 0.5) * window.innerWidth;
-      const y = (-hand.ndcY * 0.5 + 0.5) * window.innerHeight;
+      const ndcX = pointWithIndex ? hand.indexNdcX : hand.ndcX;
+      const ndcY = pointWithIndex ? hand.indexNdcY : hand.ndcY;
+      const x = (ndcX * 0.5 + 0.5) * window.innerWidth;
+      const y = (-ndcY * 0.5 + 0.5) * window.innerHeight;
 
       if (punto) {
         punto.style.opacity = "1";
@@ -113,7 +127,7 @@ export function CameraControls({
       cancelAnimationFrame(handle);
       cameraRig.handBusy = false;
     };
-  }, [handTracking, input]);
+  }, [handTracking, input, pointWithIndex]);
 
   return (
     <div className="camctl">
@@ -134,6 +148,17 @@ export function CameraControls({
                 onChange={(event) => onToggleLandmarks(event.target.checked)}
               />
               <span>Mostrar puntos de la mano</span>
+            </label>
+          )}
+
+          {handTracking && showLandmarks && (
+            <label className="camctl-check">
+              <input
+                type="checkbox"
+                checked={landmarksExpanded}
+                onChange={(event) => onToggleExpanded(event.target.checked)}
+              />
+              <span>Ampliar vista de depuración</span>
             </label>
           )}
 

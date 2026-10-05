@@ -12,6 +12,7 @@ export function Hud({
   micOn,
   voiceOn,
   onToggleMic,
+  onToggleHand,
   onLeave,
   onClose,
 }: {
@@ -27,6 +28,8 @@ export function Hud({
   micOn: boolean;
   voiceOn: boolean;
   onToggleMic: () => void;
+  /** Levanta o baja la mano a mano: en modo mouse/toque el gesto no alcanza a sostenerse. */
+  onToggleHand: () => void;
   onLeave: () => void;
   /** Solo el profesor: cierra el salón y lo deja libre para la clase siguiente. */
   onClose: (() => void) | null;
@@ -71,6 +74,15 @@ export function Hud({
           >
             {voiceOn ? (micOn ? "Micrófono activo" : "Micrófono en silencio") : "Sin voz"}
           </button>
+          {!editing && (
+            <button
+              className={`icon ${snapshot.handRaised ? "on" : ""}`}
+              onClick={onToggleHand}
+              title="Pedir o dejar de pedir la palabra"
+            >
+              {snapshot.handRaised ? "Bajar la mano" : "Pedir la palabra"}
+            </button>
+          )}
           <span className="chip mono" title="Render / detección de manos">
             {snapshot.renderFps} fps · {snapshot.source === "camera" ? `${snapshot.detectFps} det` : "mouse"}
           </span>
@@ -87,16 +99,28 @@ export function Hud({
 
       <div className="hud-help">
         {editing ? (
+          snapshot.source === "camera" ? (
+            <>
+              <b>Apunta</b> a un botón y <b>deja la mano quieta</b> —o pellizca— para
+              pulsarlo · la pieza que sacas <b>ya viene en la mano</b>: llévala a la mesa
+              y <b>pellizca</b> para soltarla · la mesa la atrae sola
+            </>
+          ) : (
+            <>
+              <b>Click</b> en un botón para pulsarlo · la pieza que sacas{" "}
+              <b>ya viene en el cursor</b>: llévala a la mesa y <b>haz click</b> para
+              soltarla · la mesa la atrae sola
+            </>
+          )
+        ) : snapshot.source === "camera" ? (
           <>
-            <b>Apunta</b> a un botón y <b>deja la mano quieta</b> —o pellizca— para
-            pulsarlo · la pieza que sacas <b>ya viene en la mano</b>: llévala a la mesa
-            y <b>pellizca</b> para soltarla · la mesa la atrae sola
+            <b>Puño</b> agarra · <b>mano abierta</b> suelta · <b>pellizco</b> selecciona ·{" "}
+            <b>mano arriba 1 s</b> pide la palabra · arrastra para mirar alrededor
           </>
         ) : (
           <>
-            <b>Puño</b> agarra · <b>mano abierta</b> suelta · <b>pellizco</b> selecciona ·{" "}
-            <b>mano arriba 1 s</b> pide la palabra
-            {snapshot.source === "camera" && <> · arrastra para mirar alrededor</>}
+            <b>Click y arrastra</b> agarra y suelta · <b>click</b> selecciona · el botón{" "}
+            <b>Pedir la palabra</b> la pide
           </>
         )}
       </div>

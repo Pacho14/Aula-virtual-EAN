@@ -1,6 +1,14 @@
 import { useFrame } from "@react-three/fiber";
-import { useRef } from "react";
-import { Color, MathUtils, type Mesh, type MeshStandardMaterial } from "three";
+import { useMemo, useRef } from "react";
+import {
+  CanvasTexture,
+  Color,
+  LinearFilter,
+  MathUtils,
+  type Mesh,
+  type MeshStandardMaterial,
+  type Sprite,
+} from "three";
 import type { AulaRoom } from "../net/room";
 import { predicted, registerGrabbable } from "./registry";
 
@@ -65,6 +73,15 @@ function SceneObjectMesh({
   hoveredRef: React.RefObject<string | null>;
 }) {
   const meshRef = useRef<Mesh>(null);
+  const labelRef = useRef<Sprite>(null);
+  // Las mesas de estudiante llevan un rotulo flotante con su nombre: el
+  // color solo no basta para distinguirlas a distancia o con mala luz.
+  const isStudentTable = id.startsWith("mesa-");
+  const labelText = room.state.objects.get(id)?.label ?? "";
+  const labelTexture = useMemo(
+    () => (isStudentTable ? makeTableLabel(labelText) : null),
+    [isStudentTable, labelText],
+  );
 
   useFrame((_, delta) => {
     const mesh = meshRef.current;
@@ -83,6 +100,10 @@ function SceneObjectMesh({
       mesh.position.z = MathUtils.damp(mesh.position.z, finite(object.z), 14, delta);
     }
     mesh.rotation.y = MathUtils.damp(mesh.rotation.y, finite(object.ry), 14, delta);
+
+    if (labelRef.current) {
+      labelRef.current.position.set(mesh.position.x, mesh.position.y + object.sy / 2 + 0.16, mesh.position.z);
+    }
 
     const material = mesh.material as MeshStandardMaterial;
     const held = object.heldBy !== "";
@@ -111,25 +132,58 @@ function SceneObjectMesh({
   const primitive = state.src.startsWith("prim:") ? state.src.slice(5) : "box";
 
   return (
-    <mesh
-      ref={(mesh) => {
-        meshRef.current = mesh;
-        // Solo los objetos interactivos entran al raycast: apuntarle a la
-        // mesa fija no deberia siquiera encender el cursor.
-        if (state.interactive && !state.locked) registerGrabbable(id, mesh);
-      }}
-      position={[state.x, state.y, state.z]}
-      rotation={[0, state.ry, 0]}
-      userData={{ objectId: id }}
-    >
-      {primitive === "cylinder" ? (
-        <cylinderGeometry args={[state.sx / 2, state.sx / 2, state.sy, 20]} />
-      ) : primitive === "sphere" ? (
-        <sphereGeometry args={[state.sx / 2, 20, 16]} />
-      ) : (
-        <boxGeometry args={[state.sx, state.sy, state.sz]} />
+    <>
+      <mesh
+        ref={(mesh) => {
+          meshRef.current = mesh;
+          // Solo los objetos interactivos entran al raycast: apuntarle a la
+          // mesa fija no deberia siquiera encender el cursor.
+          if (state.interactive && !state.locked) registerGrabbable(id, mesh);
+        }}
+        position={[state.x, state.y, state.z]}
+        rotation={[0, state.ry, 0]}
+        userData={{ objectId: id }}
+      >
+        {primitive === "cylinder" ? (
+          <cylinderGeometry args={[state.sx / 2, state.sx / 2, state.sy, 20]} />
+        ) : primitive === "sphere" ? (
+          <sphereGeometry args={[state.sx / 2, 20, 16]} />
+        ) : (
+          <boxGeometry args={[state.sx, state.sy, state.sz]} />
+        )}
+        <meshStandardMaterial color={state.color} roughness={0.55} metalness={0.05} />
+      </mesh>
+      {labelTexture && (
+        <sprite ref={labelRef} scale={[0.5, 0.125, 1]}>
+          <spriteMaterial map={labelTexture} transparent depthWrite={false} />
+        </sprite>
       )}
-      <meshStandardMaterial color={state.color} roughness={0.55} metalness={0.05} />
-    </mesh>
+    </>
   );
+}
+
+/** Rotulo flotante sobre una mesa de estudiante, con su nombre. */
+function makeTableLabel(text: string) {
+  const width = 400;
+  const height = 100;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "rgba(16, 26, 27, 0.82)";
+  ctx.beginPath();
+  ctx.roundRect(4, 14, width - 8, height - 28, 12);
+  ctx.fill();
+
+  ctx.font = "600 34px system-ui, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillStyle = "#F2F6F6";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text.slice(0, 22), width / 2, height / 2 + 2);
+
+  const texture = new CanvasTexture(canvas);
+  texture.minFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
 }

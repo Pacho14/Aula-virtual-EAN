@@ -69,9 +69,24 @@ export const HAND_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
 
 export interface HandFrame {
   handedness: "left" | "right";
-  /** Coordenadas normalizadas de dispositivo del puntero. -1..1 */
+  /**
+   * Coordenadas normalizadas de dispositivo del puntero. -1..1
+   *
+   * Salen del centro de la palma: es lo que no se desplaza al cerrar el puño,
+   * así que el objeto que se agarra no salta en el instante de tomarlo. Es el
+   * puntero del salón de clases.
+   */
   ndcX: number;
   ndcY: number;
+  /**
+   * Lo mismo, pero desde la punta del índice.
+   *
+   * El lobby apunta con esto: señalar un portal con el dedo es el gesto que
+   * la gente hace sola, y ahí no hay nada que agarrar, así que el salto de la
+   * punta al cerrar la mano no importa.
+   */
+  indexNdcX: number;
+  indexNdcY: number;
   /** Altura cruda en la imagen, 0 arriba y 1 abajo. Para "levantar la mano". */
   rawY: number;
   /** Tamano aparente de la palma: sirve de proxy de profundidad. */
@@ -92,6 +107,14 @@ export interface HandFrame {
    * dispositivo: lo que cruza son 63 números por mano.
    */
   landmarks: Float32Array | null;
+  /**
+   * Los mismos 21 puntos en `worldLandmarks`: metros reales relativos a la
+   * muñeca, con la proporción de la mano ya resuelta por MediaPipe. Para
+   * dibujar la forma de la mano en 3D es esto lo que hay que usar, no
+   * `landmarks` -que es normalizado a la imagen y se encoge o se infla según
+   * qué tan cerca esté la mano de la cámara o cómo esté girada.
+   */
+  worldLandmarks: Float32Array | null;
 }
 
 export interface InputFrame {

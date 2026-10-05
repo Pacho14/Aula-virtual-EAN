@@ -40,7 +40,13 @@ export class WidgetPointer {
    * Cuando lo está, la escena no debe mirar los objetos agarrables: cerrar el
    * puño sobre un deslizador no puede, además, llevarse un cubo de la mesa.
    */
-  update(raycaster: Raycaster, now: number, holding: boolean, select: boolean): boolean {
+  update(
+    raycaster: Raycaster,
+    now: number,
+    holding: boolean,
+    select: boolean,
+    allowDwell: boolean,
+  ): boolean {
     // Cerrar la mano cuenta como pulsar, pero solo en el instante en que se
     // cierra. Si valiera el estado y no el flanco, barrer la fila de botones
     // con el puño ya cerrado los dispararía todos de paso; y sin esto, con
@@ -93,6 +99,14 @@ export class WidgetPointer {
       this.since = now;
       pointer.dwell = 0;
       widget.activate?.();
+      return true;
+    }
+
+    // En modo mouse/toque el click ya pulsa (arriba): quedarse quieto encima
+    // de un boton no debe pulsarlo tambien, o un clic real se confunde con
+    // simplemente apuntar. Esto queda solo para camara, donde no hay click.
+    if (!allowDwell) {
+      pointer.dwell = 0;
       return true;
     }
 
