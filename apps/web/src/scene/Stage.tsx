@@ -118,6 +118,7 @@ export function Stage({
         input={input}
         scene={scene}
         voice={voice}
+        editing={editing}
         hoveredRef={hoveredRef}
         onHud={onHud}
       />

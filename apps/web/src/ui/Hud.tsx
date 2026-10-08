@@ -114,8 +114,9 @@ export function Hud({
           )
         ) : snapshot.source === "camera" ? (
           <>
-            <b>Puño</b> agarra · <b>mano abierta</b> suelta · <b>pellizco</b> selecciona ·{" "}
-            <b>mano arriba 1 s</b> pide la palabra · arrastra para mirar alrededor
+            <b>Apunta con el dedo y espera</b> a que se llene el anillo para tomar la
+            pieza · <b>pellizco</b> la suelta · <b>mano arriba 1 s</b> pide la palabra ·
+            arrastra para mirar alrededor
           </>
         ) : (
           <>

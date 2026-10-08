@@ -216,7 +216,15 @@ await paso("pestana de profesor", async () => {
   await profe.waitForSelector("#code", { timeout: 8000 });
 });
 
-const SALON = 2;
+/**
+ * En que salon monta la prueba su clase.
+ *
+ * Se puede cambiar con `SALON=3 npm run test:navegador` porque solo hay tres
+ * y la prueba necesita uno libre: si estas probando a mano en el salon 2, la
+ * prueba no puede abrir ahi y falla entera por una razon que no tiene nada
+ * que ver con lo que se este probando.
+ */
+const SALON = Number(process.env.SALON ?? 2);
 
 await paso("abrir la clase en un salon", async () => {
   await profe.type("#code", CODE);

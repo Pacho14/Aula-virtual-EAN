@@ -873,6 +873,25 @@ input:focus-visible {
   box-shadow: 0 0 0 5px rgba(18, 147, 138, 0.25);
 }
 
+/*
+ * El contador de la espera sostenida sobre un riel.
+ *
+ * Es el mismo lenguaje que el anillo de la escena 3D -un arco que se llena-,
+ * para que apuntar y esperar se vea igual en los dos sitios. El arco lo marca
+ * `--dwell` en grados, que escribe CameraControls en cada cuadro; a 0deg el
+ * conic-gradient no pinta nada, asi que en reposo desaparece solo.
+ */
+.camctl-hand::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) var(--dwell, 0deg), transparent 0);
+  -webkit-mask: radial-gradient(circle, transparent 0 11px, #000 11px);
+  mask: radial-gradient(circle, transparent 0 11px, #000 11px);
+  pointer-events: none;
+}
+
 .landmarks {
   position: fixed;
   left: 14px;

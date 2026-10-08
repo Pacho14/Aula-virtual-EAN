@@ -10,6 +10,7 @@
  * aun no existe; engancharse a el fallaba justo al entrar. Como el lienzo
  * ocupa toda la ventana, medir contra la ventana da el mismo resultado.
  */
+import { REACH } from "./handSpace";
 import { emptyFrame, type Gesture, type InputFrame, type InputSource } from "./types";
 
 export class MouseSource implements InputSource {
@@ -84,7 +85,10 @@ export class MouseSource implements InputSource {
       indexNdcX: this.ndcX,
       indexNdcY: this.ndcY,
       rawY: (1 - this.ndcY) / 2,
-      span: 0.1,
+      // El mouse no tiene profundidad: la mano se queda donde se queda una
+      // mano en reposo, que es la misma distancia que usaba el modo camara
+      // cuando era fija.
+      cameraDistance: REACH.rest,
       gesture: this.gesture,
       pinch: this.gesture === "fist" ? 1 : 0,
       // El mouse no tiene dedos. Nada que dibujar en la vista de puntos.

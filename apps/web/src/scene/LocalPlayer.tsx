@@ -1,13 +1,14 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
 import { Plane, Vector2, Vector3, type Camera } from "three";
+import { INDEX_TIP, jointInViewSpace, viewDepth, type Vec3 } from "../input/handSpace";
 import type { InputLayer } from "../input/inputLayer";
 import { GESTURE_INDEX, type HandFrame } from "../input/types";
 import { aimAt, type Scene } from "../net/api";
 import type { AulaRoom } from "../net/room";
 import type { Voice } from "../net/voice";
 import { cursorState, handRay, HandCursor } from "../ui3d/HandCursor";
-import { WidgetPointer } from "../ui3d/pointer";
+import { DWELL_MS, WidgetPointer } from "../ui3d/pointer";
 import { exposeWidgetProbe, pointer } from "../ui3d/widgets";
 import { cameraRig, nudgeRig, restRig } from "./cameraRig";
 import { HandSkeleton, type HandSkeletonHandle } from "./HandSkeleton";
@@ -26,12 +27,13 @@ export interface HudSnapshot {
 
 /** El cliente envia pose 20 veces por segundo, como fija la seccion 05. */
 const POSE_INTERVAL_MS = 50;
-/** Distancia a la que se dibuja la propia mano sobre el rayo. */
-const HAND_DISTANCE = 0.55;
 
 const UP = new Vector3(0, 1, 0);
 
 const ndc = new Vector2();
+/** Cuanto separa la punta del indice de la muñeca. Ver `projectHand`. */
+const tipOffset: Vec3 = [0, 0, 0];
+const tipWorld = new Vector3();
 const targetPos = new Vector3();
 const forward = new Vector3();
 const surface = new Plane();
@@ -43,6 +45,7 @@ export function LocalPlayer({
   input,
   scene,
   voice,
+  editing,
   hoveredRef,
   onHud,
 }: {
@@ -51,6 +54,8 @@ export function LocalPlayer({
   input: InputLayer;
   scene: Scene;
   voice: Voice | null;
+  /** El profesor armando el salon, antes de que entre nadie. */
+  editing: boolean;
   hoveredRef: React.RefObject<string | null>;
   onHud: (snapshot: HudSnapshot) => void;
 }) {
@@ -66,9 +71,6 @@ export function LocalPlayer({
   const held = useRef<Held | null>(null);
   const pending = useRef<(Held & { at: number }) | null>(null);
   const timers = useRef({ pose: 0, hud: 0, frames: 0, fpsAt: 0, renderFps: 0 });
-  /** Ultimo tamano de palma visto: proxy de profundidad para la propia mano. */
-  const lastSpan = useRef(0.1);
-  const cursorDistance = useRef(2.6);
   const widgetPointer = useRef(new WidgetPointer());
   /** Un pellizco vale por un cuadro: es un flanco, no un estado. */
   const selectPulse = useRef(false);
@@ -81,8 +83,17 @@ export function LocalPlayer({
    * que es un gesto deliberado, o cerrar la mano y volver a abrirla.
    */
   const armed = useRef(false);
+  /** A que distancia corto el rayo la pieza: donde va el contador. */
+  const hitDistance = useRef(2.6);
+  /** Que pieza se esta esperando y desde cuando. */
+  const objectDwell = useRef<{ id: string | null; since: number }>({ id: null, since: 0 });
   const leftHandRef = useRef<HandSkeletonHandle>(null);
   const rightHandRef = useRef<HandSkeletonHandle>(null);
+  /**
+   * Donde esta cada mano en la escena. Sirve para dos cosas: dibujar la
+   * propia mano, y viajar en la pose -de aqui salen las manos del avatar que
+   * ven los demas participantes.
+   */
   const handWorld = useRef({
     left: new Vector3(),
     right: new Vector3(),
@@ -202,10 +213,12 @@ export function LocalPlayer({
 
   useFrame((_, delta) => {
     const now = performance.now();
+    // Antes de leer el cuadro, porque de aqui sale si "mano abierta" se puede
+    // leer como pedir la palabra o es solo soltar lo que se lleva.
+    input.setCarrying(Boolean(held.current || pending.current));
     const frame = input.tick(now);
 
     const primary = frame.primary;
-    if (primary) lastSpan.current = primary.span;
 
     // La camara no se desplaza nunca: se queda en el punto asignado y solo
     // cambia hacia donde mira, y eso lo deciden los deslizadores de pantalla.
@@ -229,8 +242,19 @@ export function LocalPlayer({
     // escena y tiene que ganarle al objeto que quede detras.
     let hovered: string | null = null;
     let onWidget = false;
+    /** Avance del contador de la espera sostenida, de 0 a 1. */
+    let dwell = 0;
     if (primary) {
-      ndc.set(primary.ndcX, primary.ndcY);
+      // La punta del indice, exactamente igual que en el lobby (ver
+      // LobbyPointer). Señalar con el dedo es el gesto que la gente hace
+      // sola, y el lobby lleva tiempo demostrando que asi se apunta bien.
+      //
+      // La razon por la que aqui se usaba la palma -que la punta se desploma
+      // al cerrar la mano y la pieza saltaria al agarrarla- es real, pero se
+      // paga en todo lo demas: se apunta peor todo el rato para que un
+      // instante concreto salga limpio. Si el salto al agarrar molesta, se
+      // arregla ahi y no cambiando como se apunta.
+      ndc.set(primary.indexNdcX, primary.indexNdcY);
       handRay.setFromCamera(ndc, camera);
 
       const gesture = primary.gesture;
@@ -242,6 +266,12 @@ export function LocalPlayer({
         widgetPointer.current.reset();
         selectPulse.current = false;
         hoveredRef.current = null;
+        // Esto sale de la funcion antes de llegar al bloque del contador, asi
+        // que hay que apagarlo aqui o se queda pintado a medio llenar
+        // mientras se mueve la camara.
+        objectDwell.current.id = null;
+        cursorState.dwell = 0;
+        cursorState.visible = false;
         return;
       }
 
@@ -270,14 +300,68 @@ export function LocalPlayer({
         const hit = hits[0];
         if (hit) {
           hovered = (hit.object.userData as { objectId?: string }).objectId ?? null;
-          cursorDistance.current = hit.distance;
+          hitDistance.current = hit.distance;
         }
+      }
+
+      // Espera sostenida sobre una pieza: apuntarla y quedarse quieto la
+      // toma, sin ningun gesto. Los botones ya se pulsaban asi; las piezas
+      // solo se podian agarrar cerrando el puño, y un gesto es justo lo que
+      // peor se lee cuando el detector va a cinco cuadros por segundo.
+      //
+      // Solo con camara: con mouse hay click, y ahi quedarse quieto encima de
+      // una pieza no puede llevarsela.
+      const puedeEsperar =
+        frame.source === "camera" && Boolean(hovered) && !held.current && !pending.current;
+      if (puedeEsperar) {
+        if (objectDwell.current.id !== hovered) {
+          objectDwell.current.id = hovered;
+          objectDwell.current.since = now;
+        }
+        dwell = Math.min(1, (now - objectDwell.current.since) / DWELL_MS);
+        if (dwell >= 1) {
+          // `false`: no se tomo cerrando el puño, asi que abrir la mano no la
+          // suelta -se caeria en el aire nada mas tomarla, porque la mano que
+          // apunta ya esta abierta. Se suelta pellizcando, o cerrando el puño
+          // y abriendolo, igual que una pieza sacada del panel.
+          startGrab(hovered!, false);
+          objectDwell.current.id = null;
+          dwell = 0;
+        }
+      } else {
+        objectDwell.current.id = null;
       }
     } else {
       widgetPointer.current.reset();
+      objectDwell.current.id = null;
     }
     selectPulse.current = false;
     hoveredRef.current = hovered;
+
+    // Siempre hay **exactamente un** puntero a la vista, nunca dos y nunca
+    // ninguno:
+    //
+    //   - Con la mano dibujada, la mano ES el puntero. El cursor solo asoma
+    //     mientras corre el contador, porque ahi si hace falta ver donde se
+    //     esta llenando el anillo.
+    //   - Sin la mano dibujada -el profesor armando el salon, o el modo
+    //     mouse-, el cursor se ve siempre. Sin esto no quedaba forma alguna
+    //     de saber a que se apunta, que es justo lo que pasaba al esconder la
+    //     mano en el editor.
+    //
+    // El contador en si va igual en los dos casos: sobre un boton o un
+    // deslizador lo lleva el puntero de la interfaz, sobre una pieza el de
+    // aqui arriba.
+    const showHands = frame.source === "camera" && !editing;
+    if (onWidget) dwell = pointer.dwell;
+    cursorState.dwell = dwell;
+    cursorState.visible = !showHands || dwell > 0.02;
+    cursorState.big = Boolean(hovered || held.current || onWidget);
+    cursorState.distance = onWidget
+      ? pointer.distance
+      : hovered
+        ? hitDistance.current
+        : 2.6;
 
     // Una pieza recien sacada del panel de objetos se toma sin soltar: elegir
     // el cubo y llevarlo a la mesa son un solo movimiento. Se reintenta unos
@@ -289,21 +373,10 @@ export function LocalPlayer({
       }
     }
 
-    // Cursor: en el punto que toca el rayo, o flotando a media sala si no
-    // toca nada. Sin un cursor visible no hay forma de apuntar con la mano.
-    cursorState.visible = Boolean(primary);
-    cursorState.distance = onWidget
-      ? pointer.distance
-      : hovered
-        ? cursorDistance.current
-        : 2.6;
-    cursorState.big = Boolean(hovered || held.current || onWidget);
-    cursorState.dwell = onWidget ? pointer.dwell : 0;
-
-    // Las propias manos, para saber donde estan sin mirar el video. Solo con
-    // camara: con mouse ya hay cursor del sistema, y una esfera a 55 cm de la
-    // cara tapa media escena sin aportar nada.
-    const showHands = frame.source === "camera";
+    // La propia mano. Con mouse no hay ninguna que dibujar, y mientras el
+    // profesor arma el salon tampoco: ahi la pantalla es casi toda paneles y
+    // la mano los tapa, asi que manda el cursor -ver arriba- y la mano vuelve
+    // al empezar la clase.
     updateOwnHand(leftHandRef.current, showHands ? frame.left : null, handWorld.current.left, camera);
     updateOwnHand(rightHandRef.current, showHands ? frame.right : null, handWorld.current.right, camera);
 
@@ -420,11 +493,15 @@ export function LocalPlayer({
     }
   });
 
+  // La propia mano hace de puntero, asi que no hay cursor permanente: el
+  // cursor era una segunda marca que decia lo mismo y nunca caia en el mismo
+  // sitio. `HandCursor` sigue montado, pero solo se enciende mientras el
+  // contador corre, y se posa sobre lo que se este esperando.
   return (
     <group>
-      <HandCursor />
       <HandSkeleton ref={leftHandRef} />
       <HandSkeleton ref={rightHandRef} />
+      <HandCursor />
     </group>
   );
 }
@@ -449,12 +526,38 @@ function updateOwnHand(
   skeleton.update(hand, world, camera, color);
 }
 
+/**
+ * Donde va la propia mano dentro de la escena.
+ *
+ * Sin cursor, la mano es la unica marca de hacia donde se apunta, asi que el
+ * rayo tiene que pasar **por la mano dibujada** o se apuntaria a un sitio y
+ * se seleccionaria otro. Y tiene que pasar por la punta del indice, que es
+ * con lo que la gente señala.
+ *
+ * Eso no sale solo. El rayo lleva la ganancia de cameraSource.ts -para que un
+ * movimiento corto alcance toda la pantalla- mientras que la forma de la mano
+ * va en metros reales, sin amplificar. Asi que se coloca al reves de lo
+ * normal: primero se calcula donde tiene que caer la punta del indice, y
+ * despues se retrocede lo que esa punta se separa de la muñeca, que es por
+ * donde se ancla el grupo.
+ *
+ * De fondo la mano va a la profundidad que diga `viewDepth`. Estirar el brazo
+ * hacia la pantalla acerca la mano a la webcam, que es alejarla de los
+ * propios ojos, asi que la mano se adentra en la escena hacia la mesa;
+ * recogerla la trae hacia la cara, donde se ve grande solo por perspectiva,
+ * porque su tamaño en metros no cambia nunca.
+ */
 function projectHand(hand: HandFrame, camera: Camera, out: Vector3) {
-  ndc.set(hand.ndcX, hand.ndcY);
+  ndc.set(hand.indexNdcX, hand.indexNdcY);
   handRay.setFromCamera(ndc, camera);
   out
     .copy(handRay.ray.origin)
-    .addScaledVector(handRay.ray.direction, HAND_DISTANCE);
+    .addScaledVector(handRay.ray.direction, viewDepth(hand.cameraDistance));
+
+  if (!hand.worldLandmarks) return;
+  jointInViewSpace(hand.worldLandmarks, INDEX_TIP, tipOffset);
+  tipWorld.set(tipOffset[0], tipOffset[1], tipOffset[2]).applyQuaternion(camera.quaternion);
+  out.sub(tipWorld);
 }
 
 function writeHand(

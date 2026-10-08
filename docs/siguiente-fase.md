@@ -1,10 +1,16 @@
 # Dónde quedamos
 
-Última sesión: **25 de septiembre de 2026**. Los dos caminos están separados:
-el profesor abre una clase en uno de los tres salones y lo arma con las manos;
-el estudiante entra con su correo a un lobby con portales, ve qué hay en cada
+Última sesión: **7 de octubre de 2026**. Los dos caminos están separados: el
+profesor abre una clase en uno de los tres salones y lo arma con las manos; el
+estudiante entra con su correo a un lobby con portales, ve qué hay en cada
 salón y entra escribiendo el código. Lo que falta para cerrar la fase no es
 código: son mediciones en equipos reales.
+
+La sesión del 7 de octubre fue entera sobre el tacto de las manos: la mano se
+dibujaba reflejada, no tenía profundidad y el puntero iba por detrás de la
+mano. Las tres cosas están corregidas y la conversión de coordenadas quedó
+probada sin navegador. Lo que sigue sin confirmarse es cómo se siente en un
+equipo de verdad.
 
 ## Para retomar
 
@@ -25,13 +31,15 @@ añadir uno nuevo, deja el `.hdr` en `HDRI/` y corre `npm run assets:hdri`.
 Antes de tocar nada, corre las tres pruebas para confirmar que sigues en verde:
 
 ```bash
+npm run test:manos                   # la conversión de coordenadas de la mano
 npm run smoke -w @aula/server        # salones, lobby, el imán, autoridad
 npm run test:acceso -w @aula/server  # acceso de profesor y vida del salón
 npm run test:navegador               # las dos personas, en un Chrome real
 ```
 
-Las pruebas **cierran las clases que abren**. Si alguna se corta a medias, un
-salón puede quedar ocupado 45 minutos: reinicia el servidor y vuelve a empezar.
+`test:manos` no necesita servidor ni navegador y tarda un segundo. Las otras
+tres **cierran las clases que abren**. Si alguna se corta a medias, un salón
+puede quedar ocupado 45 minutos: reinicia el servidor y vuelve a empezar.
 
 ## Lo que ya funciona y está verificado
 
@@ -61,6 +69,39 @@ salón puede quedar ocupado 45 minutos: reinicia el servidor y vuelve a empezar.
   La mano mueve el deslizador y el deslizador mueve la cámara, nunca al revés.
 - Los 21 puntos de cada mano llegan al hilo principal y se pueden dibujar en
   pantalla para calibrar.
+- La mano se dibuja **como la ve quien la mueve, no reflejada**. La conversión
+  de ejes es un solo giro de 180° con determinante +1, vive aparte en
+  `input/handSpace.ts` y la prueba `npm run test:manos` la comprueba con manos
+  derechas sintéticas en seis orientaciones.
+- La mano tiene **profundidad**: estirar el brazo hacia la pantalla la adentra
+  en la escena, recogerlo la trae hacia la cara. La distancia sale de comparar
+  el tamaño aparente de la mano contra su tamaño real en metros, así que no
+  cambia al girar la mano.
+- El puntero se **adelanta** por la velocidad que el filtro One Euro ya
+  calcula, acotado a 90 ms, para cancelar el retraso del pipeline en vez de
+  solo suavizarlo. Con la mano quieta no adelanta nada.
+- Se apunta con la **punta del índice** en todas partes, y la regla es que
+  siempre haya **exactamente un puntero a la vista**: la mano cuando se
+  dibuja, y el cursor cuando no. Con la mano a la vista el cursor solo asoma
+  mientras corre el contador. Sin mano —el lobby, el profesor armando el
+  salón, el modo mouse— el cursor se ve siempre. Las dos marcas juntas no
+  funcionan, porque el cursor lleva ganancia para alcanzar la pantalla y la
+  mano va en metros reales: nunca caen en el mismo sitio.
+- Para que el dedo dibujado apunte de verdad a lo que se selecciona, la mano
+  se ancla al revés: primero dónde cae la punta del índice sobre el rayo, y
+  después se retrocede hasta la muñeca. Lo sujeta una prueba.
+- La mano no se dibuja mientras el profesor **arma el salón**: ahí la pantalla
+  es casi toda paneles.
+- **La espera sostenida vale ya para todo**: botones, piezas y deslizadores
+  -los de cámara y los del editor. Apuntas, te quedas quieto, un anillo se
+  llena y al completarse la pieza es tuya o el deslizador salta a donde
+  señalas. Es la única vía que no depende de leer un gesto, que es lo que peor
+  funciona con el detector a 5 Hz; antes los deslizadores exigían pellizcar sí
+  o sí. El anillo solo se dibuja mientras el contador corre, y el punto de los
+  deslizadores de cámara solo aparece encima de un riel.
+- Pedir la palabra sigue siendo la mano abierta en alto 1 s, pero el detector
+  se congela mientras se lleva una pieza: soltar algo en alto es abrir la mano
+  en alto.
 
 **Sala**
 
@@ -84,6 +125,24 @@ instrucciones largas*. Eso no se verifica desde esta máquina:
 4. ¿Cuánto tarda un profesor en armar un salón completo, sin ayuda?
 5. ¿Aguanta la detección con luz de techo y con contraluz?
 6. ¿A los cuántos minutos se cansa el brazo?
+7. ¿**Se siente la mano propia, o se siente un muñeco**? Es lo que se arregló
+   el 7 de octubre y no se puede medir desde esta máquina. Tres cosas que mirar
+   por separado: que la mano no esté reflejada —el pulgar es la señal más
+   rápida: con la palma abajo y los dedos al frente tiene que quedar del mismo
+   lado que el tuyo—, que acercar y alejar el brazo mueva la mano en
+   profundidad, y que el cursor no vaya por detrás de la mano.
+8. ¿La profundidad cubre un rango útil? El recuadro de depuración muestra la
+   distancia estimada de cada mano en metros, así que se compara con una
+   cinta métrica y se acaba la discusión. Si sale escalada por un factor
+   constante, el número a mover es `FOCAL` en `input/handSpace.ts`: depende
+   del campo de visión de la webcam. Si dice **«sin profundidad»** no es un
+   problema de calibración: significa que el ajuste salió negativo, es decir
+   que los ejes X/Y de `worldLandmarks` no son paralelos a los de la imagen
+   como se asume aquí. El rango cómodo se ajusta con `REACH`, en ese mismo
+   archivo, donde cada constante dice qué significa.
+9. ¿El adelanto del puntero se pasa de largo al frenar? Si se nota un rebote
+   al parar la mano en seco, hay que bajar `PREDICT_MS` en `cameraSource.ts`;
+   si sigue sintiéndose con retraso, subirlo.
 
 Dos piezas siguen sin probarse con gente:
 
@@ -118,6 +177,29 @@ El documento de arquitectura tiene el detalle de cada una.
 
 ## Cosas que aprendimos construyendo, y conviene no olvidar
 
+- **Lo que hace que una mano se vea reflejada es el determinante, no el signo
+  de un eje.** Negar los tres ejes a la vez es una reflexión: la mano derecha
+  se dibuja con la forma de una izquierda y los dedos estirados hacia la
+  webcam salen apuntando a la propia cara. Lo tramposo es que el remedio
+  intuitivo —quitar el giro horizontal, que es el que *parece* el espejo—
+  vuelve a dejar el determinante en −1 y refleja la mano otra vez, además de
+  invertir la dirección en que se mueve. La conversión correcta son dos giros
+  compuestos, `(−x, −y, +z)`, determinante +1. Y hay una razón para que esto
+  viviera meses sin que nadie lo viera: **ninguna prueba de posición lo
+  detecta.** La mano salía en su sitio, del tamaño correcto y moviéndose en la
+  dirección correcta; lo único mal era su forma. Por eso `handSpace.ts` no
+  depende de three ni del DOM y `npm run test:manos` construye manos de las
+  que ya se sabe la respuesta.
+- **Suavizar menos no quita el retraso, solo una parte.** El cuadro que se
+  dibuja se capturó hace 100 ms contando captura, detección y mensaje de
+  vuelta; con el filtro al mínimo ese retraso sigue entero. Lo que lo cancela
+  es adelantar por la velocidad —que el filtro One Euro ya calcula de paso— y
+  acotar cuánto. Con la mano quieta la velocidad es cero, así que no cuesta
+  nada en temblor: es gratis en el único caso donde suavizar importa.
+- **Medir profundidad con una distancia 2D la hace cambiar al girar la mano.**
+  Una mano girada se ve más estrecha y por tanto "más lejos" sin haberse
+  movido. Hay que comparar lo aparente contra lo real *medido en el plano de
+  la imagen*: las dos se encogen igual al girar y el cociente no se mueve.
 - **Un NaN en el estado hace desaparecer un objeto sin dejar rastro.** El
   servidor creaba las piezas sin asignarles giro, el cliente recibía un ángulo
   que no era un número, y la matriz del objeto se llenaba de NaN: three lo

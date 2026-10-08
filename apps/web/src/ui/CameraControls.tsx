@@ -26,6 +26,7 @@ import {
   setRigYaw,
   subscribeRig,
 } from "../scene/cameraRig";
+import { DWELL_MS } from "../ui3d/pointer";
 
 /** Margen alrededor del riel dentro del cual el pellizco ya cuenta. */
 const AGARRE = 26;
@@ -67,6 +68,8 @@ export function CameraControls({
   const rieles = useRef(new Map<string, Riel>());
   const held = useRef<Riel | null>(null);
   const pinching = useRef(false);
+  /** Que riel se esta esperando y desde cuando. */
+  const espera = useRef<{ riel: Riel | null; desde: number }>({ riel: null, desde: 0 });
   const cursor = useRef<HTMLDivElement>(null);
 
   const registrar = useCallback((riel: Riel | null, id: string) => {
@@ -87,6 +90,7 @@ export function CameraControls({
       handle = requestAnimationFrame(pump);
       const hand = input.peek().primary;
       const punto = cursor.current;
+      const now = performance.now();
 
       if (!hand) {
         if (punto) punto.style.opacity = "0";
@@ -95,6 +99,7 @@ export function CameraControls({
           cameraRig.handBusy = false;
         }
         pinching.current = false;
+        espera.current.riel = null;
         return;
       }
 
@@ -102,16 +107,11 @@ export function CameraControls({
       const ndcY = pointWithIndex ? hand.indexNdcY : hand.ndcY;
       const x = (ndcX * 0.5 + 0.5) * window.innerWidth;
       const y = (-ndcY * 0.5 + 0.5) * window.innerHeight;
-
-      if (punto) {
-        punto.style.opacity = "1";
-        punto.style.transform = `translate(${x - 9}px, ${y - 9}px)`;
-        punto.dataset.pinch = hand.gesture === "pinch" ? "si" : "no";
-      }
+      const sobre = buscarRiel(rieles.current, x, y);
 
       const ahora = hand.gesture === "pinch";
       if (ahora && !pinching.current) {
-        held.current = buscarRiel(rieles.current, x, y);
+        held.current = sobre;
         cameraRig.handBusy = held.current !== null;
       } else if (!ahora && pinching.current) {
         held.current = null;
@@ -119,7 +119,42 @@ export function CameraControls({
       }
       pinching.current = ahora;
 
-      if (held.current) held.current.apply(posicionEnRiel(held.current, x, y));
+      // Espera sostenida sobre el riel, igual que sobre una pieza o un boton:
+      // apuntar y quedarse quieto lleva el deslizador a donde se apunta. El
+      // pellizco se queda como atajo para arrastrarlo de un tiron, pero ya no
+      // es la unica via -que es lo que fallaba, porque el pellizco es el
+      // gesto que peor se lee con el detector lento.
+      let avance = 0;
+      if (held.current) {
+        held.current.apply(posicionEnRiel(held.current, x, y));
+        espera.current.riel = null;
+      } else if (sobre) {
+        if (espera.current.riel !== sobre) {
+          espera.current.riel = sobre;
+          espera.current.desde = now;
+        }
+        avance = Math.min(1, (now - espera.current.desde) / DWELL_MS);
+        if (avance >= 1) {
+          sobre.apply(posicionEnRiel(sobre, x, y));
+          // Se rearma en vez de bloquearse: un deslizador se ajusta varias
+          // veces seguidas, al reves que un boton, que no debe repetirse solo.
+          espera.current.desde = now;
+          avance = 0;
+        }
+      } else {
+        espera.current.riel = null;
+      }
+
+      if (punto) {
+        // El punto solo se ve cuando sirve de algo: encima de un riel o
+        // arrastrandolo. Suelto por la pantalla era un cursor permanente que
+        // no apuntaba a nada, y ademas lleva la ganancia del puntero, asi que
+        // se iba a la esquina mientras la mano estaba centrada.
+        punto.style.opacity = sobre || held.current ? "1" : "0";
+        punto.style.transform = `translate(${x - 9}px, ${y - 9}px)`;
+        punto.dataset.pinch = ahora ? "si" : "no";
+        punto.style.setProperty("--dwell", `${Math.round(avance * 360)}deg`);
+      }
     };
 
     handle = requestAnimationFrame(pump);

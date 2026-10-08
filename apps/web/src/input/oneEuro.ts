@@ -22,6 +22,19 @@ export class OneEuroFilter {
     this.tPrev = 0;
   }
 
+  /**
+   * Velocidad estimada, en unidades por segundo.
+   *
+   * El filtro ya la calcula -es lo que usa para decidir cuánto filtrar-, así
+   * que exponerla no cuesta nada. Con ella el hilo principal puede adelantar
+   * la posición por lo que lleve de retraso el cuadro: a mano quieta vale
+   * cero y no añade temblor, y a mano en movimiento cancela el retraso en vez
+   * de solo reducirlo. Ver `PREDICT_MS` en cameraSource.ts.
+   */
+  get velocity() {
+    return this.dxPrev;
+  }
+
   filter(x: number, timestampMs: number): number {
     if (this.xPrev === null) {
       this.xPrev = x;
@@ -81,15 +94,21 @@ export class HandFilter {
    */
   readonly ix = new OneEuroFilter(3.0, 0.8);
   readonly iy = new OneEuroFilter(3.0, 0.8);
-  // La escala se usa para la profundidad: filtrar mas duro evita que el
-  // objeto agarrado se vaya y venga solo.
-  readonly span = new OneEuroFilter(0.6, 0.005);
+  /**
+   * Distancia de la mano a la webcam, en metros.
+   *
+   * Va en metros y no en "tamaño aparente", asi que sus cortes no se parecen
+   * a los de arriba: una mano se acerca a la camara como mucho a medio metro
+   * por segundo, y el ruido de la estimacion es lo que hay que callar. Filtrar
+   * mas duro aqui evita que la mano se vaya y venga de profundidad sola.
+   */
+  readonly distance = new OneEuroFilter(1.5, 0.4);
 
   reset() {
     this.x.reset();
     this.y.reset();
     this.ix.reset();
     this.iy.reset();
-    this.span.reset();
+    this.distance.reset();
   }
 }

@@ -61,14 +61,20 @@ mitad de clase: se desecha a los 45 minutos vacío, o cuando vence el PIN a las
 | `npm run assets:hdri` | Reduce la carpeta `HDRI/` a entornos servibles |
 | `npm run smoke -w @aula/server` | Dos participantes reales: poses, agarres, autoridad del servidor |
 | `npm run test:acceso -w @aula/server` | Control de acceso de profesor y vida del salón |
+| `npm run test:manos` | La conversión de coordenadas de la mano, sin navegador |
 | `npm run test:navegador` | La aplicación en un Chrome real, con capturas |
 | `npm run tunnel` | Levanta el túnel de Cloudflare (ver más abajo) |
 
-Las pruebas necesitan el servidor corriendo. Las de servidor aceptan una URL
-para verificar que el túnel transporta también el WebSocket:
+Las pruebas necesitan el servidor corriendo, salvo `test:manos`, que es
+aritmética pura y corre en un segundo. Las de servidor aceptan una URL para
+verificar que el túnel transporta también el WebSocket:
 `npm run smoke -w @aula/server -- https://algo.trycloudflare.com profe2026`
 
 ### La prueba de navegador
+
+Monta su clase en el salón 2. Si estás probando a mano justo ahí, la prueba no
+puede abrir y falla entera por algo que no tiene que ver con lo que probabas:
+`SALON=3 npm run test:navegador` la manda a otro.
 
 `npm run test:navegador` abre un Chrome de verdad (usa el que ya está instalado,
 vía `puppeteer-core`) y recorre la sesión completa: el profesor crea el salón,
@@ -221,19 +227,156 @@ suaviza el puntero con un filtro One Euro y devuelve el resultado junto con los
 renumerar. Son 63 números por mano; el vídeo no sale del dispositivo ni del
 hilo del worker.
 
+#### Se apunta con el dedo, y la mano es el puntero
+
+En los dos sitios el puntero sale de la **punta del índice**: señalar con el
+dedo es el gesto que la gente hace sola. Lo que cambia es la marca en pantalla.
+
+La regla es que **siempre hay exactamente un puntero a la vista, nunca dos y
+nunca ninguno**:
+
+| Dónde | Mano | Cursor |
+|---|---|---|
+| Lobby | no | **sí**, siempre |
+| Salón, clase en curso | **sí** | solo mientras corre el contador |
+| Salón, profesor armando | no | **sí**, siempre |
+| Modo mouse | no | **sí**, siempre |
+
+El profesor armando el salón no ve su mano porque la pantalla es casi toda
+paneles y la mano los tapa; por eso ahí manda el cursor. Las dos marcas a la
+vez sobran, pero ninguna de las dos deja sin saber a qué se apunta.
+
+Tener las dos cosas a la vez no funciona, y no es cuestión de afinarlas. El
+cursor lleva una ganancia de 1,9 para que un movimiento corto alcance toda la
+pantalla —sin eso hay que estirar el brazo hasta el borde del cuadro, que es
+la fatiga que el documento marca como riesgo—, mientras que la forma de la
+mano va en metros reales, sin amplificar. Son dos marcas que dicen lo mismo y
+que no caen en el mismo sitio.
+
+Por eso, con la mano haciendo de puntero, se coloca al revés de lo normal:
+primero se calcula dónde tiene que caer **la punta del índice** sobre el rayo,
+y después se retrocede lo que esa punta se separa de la muñeca, que es por
+donde se ancla el grupo. Así el dedo dibujado apunta exactamente a lo que se
+va a seleccionar. Si `jointInViewSpace` y `toViewSpace` dejaran de coincidir
+eso se rompería sin avisar, así que hay una prueba que lo sujeta.
+
+#### La conversión de coordenadas, y por qué no es un espejo
+
+La diferencia entre ver tu mano y ver su reflejo no está en dónde aparece,
+sino en su **quiralidad**: si lo dibujado tiene
+la forma de una mano derecha o de una izquierda. Y eso lo decide el
+determinante de la conversión de ejes, no el signo de un eje suelto.
+
+La conversión completa, de MediaPipe a la vista, es **un solo giro de 180°**
+sobre el eje de la vista: `(−x, −y, +z)`. Son dos giros compuestos —cambio de
+convención de ejes y cambio de punto de vista, porque la webcam está enfrente
+mirándote y tú la miras a ella—, y su determinante es +1.
+
+| Conversión | det | Qué se ve |
+|---|---|---|
+| `−x, −y, −z` | −1 | mano reflejada |
+| `+x, −y, +z` | −1 | mano reflejada |
+| `−x, −y, +z` | **+1** | la mano de quien la mueve |
+
+Las dos primeras filas no son hipótesis: la segunda es lo que pasa si se quita
+el giro horizontal creyendo que es el espejo. **Quitarlo no elimina el
+reflejo, lo crea.** La cuenta vive aparte, en `handSpace.ts`, sin three ni DOM,
+para poder probarla sin navegador:
+
+```bash
+npm run test:manos
+```
+
+Esa prueba construye manos derechas sintéticas en seis orientaciones y
+comprueba que siguen siendo derechas al convertirlas. Hace falta porque este
+fallo **no lo detecta ninguna prueba de posición**: la mano salía en su sitio,
+del tamaño correcto y moviéndose en la dirección correcta. Lo único que estaba
+mal era su forma.
+
+#### Profundidad: la mano se adentra en la escena
+
+La mano ya no está clavada a una distancia fija. Su distancia a la webcam se
+estima comparando el tamaño **aparente** de los 21 puntos en la imagen contra
+su tamaño **real** en metros, que es lo que da `worldLandmarks`. El ajuste es
+por mínimos cuadrados sobre los 21 puntos, y usa solo las componentes
+paralelas al plano de la imagen: así las dos medidas se encogen igual cuando
+la mano gira y el cociente no se mueve. Medir la profundidad con una sola
+distancia 2D —lo que hacía antes— hacía que la mano "se fuera" al girarla sin
+haberse movido.
+
+Y el signo sale del cuerpo, no de una preferencia: empujar la mano hacia la
+pantalla la acerca a la webcam, que es **alejarla de los propios ojos**, así
+que la mano se adentra en la escena hacia lo que hay sobre la mesa. Recogerla
+contra el pecho la trae hacia la cara, donde se ve grande solo por
+perspectiva: su tamaño en metros no cambia nunca.
+
+#### Retraso: se adelanta, no se suaviza más
+
+El cuadro que se está dibujando se capturó hace rato —entre captura, detección
+y mensaje de vuelta pasan fácil 100 ms—, y durante todo ese tiempo el cursor
+dibuja donde **estaba** la mano. Bajar el suavizado solo reduce una parte de
+ese retraso; aquí se cancela adelantando la posición por la velocidad que el
+filtro One Euro ya calcula de paso, acotada a 90 ms. Con la mano quieta la
+velocidad es cero, así que no añade ni un píxel de temblor.
+
+La captura va por `requestVideoFrameCallback`, que avisa una vez por cuadro de
+la cámara y no por refresco de pantalla: así no se gasta nada procesando el
+mismo cuadro dos veces. Y en cuanto el worker contesta, el cuadro siguiente
+sale en el acto en vez de esperar al siguiente tic del reloj.
+
 Los puntos se pueden ver en pantalla con **Mostrar puntos de la mano**, en los
 controles de cámara. No es un adorno: sirve para ver por qué el detector no
-encuentra una mano —mala luz, contraluz, la mano fuera de cuadro— y para
-comprobar que izquierda y derecha son las que uno cree.
+encuentra una mano —mala luz, contraluz, la mano fuera de cuadro—, para
+comprobar que izquierda y derecha son las que uno cree, y para leer la
+distancia estimada de cada mano en metros, que es lo único de la profundidad
+que no se puede juzgar a ojo.
+
+La mano propia se dibuja en el salón y no en el lobby: ver más abajo. No se
+dibuja mientras el profesor **arma el salón**, porque ahí la pantalla es casi
+toda paneles y la mano los tapa; vuelve al empezar la clase.
 
 | Gesto | Acción |
 |---|---|
 | Índice extendido | Apuntar |
+| **Mano quieta sobre algo** | **Tomarlo: un botón o una pieza, da igual** |
 | Pellizco | Seleccionar, pulsar un botón, soltar la pieza que se lleva |
-| Mano quieta sobre un botón | Pulsarlo, sin depender de ningún gesto |
-| Puño cerrado | Agarrar y mover |
+| Puño cerrado | Agarrar y mover; sobre un botón, pulsarlo |
 | Mano abierta | Soltar lo que se agarró con el puño |
-| Mano arriba 1 s | Pedir la palabra |
+| Mano abierta y arriba 1 s | Pedir la palabra |
+
+**La espera sostenida vale para todo: botones, piezas y deslizadores.**
+Apuntas con el dedo, te quedas quieto, y un anillo se llena sobre lo que estés
+apuntando. Al completarse, la pieza es tuya o el deslizador salta a donde
+señalas. Importa porque un gesto es justo lo que peor se lee cuando el
+detector va lento, y esta vía no depende de ninguno: solo de apuntar y
+esperar. El pellizco sigue existiendo como atajo, pero ya no es obligatorio
+en ningún sitio — antes los deslizadores solo se podían mover pellizcando.
+
+Los deslizadores se rearman en vez de bloquearse: un deslizador se ajusta
+varias veces seguidas, al revés que un botón, que no debe dispararse solo una
+y otra vez mientras se le mira.
+
+El anillo **solo aparece mientras el contador corre**. Sin nada debajo no se
+dibuja nada, que es lo que diferencia esto de llevar un cursor permanente en
+pantalla.
+
+Una pieza tomada así no se suelta abriendo la mano, porque la mano que apunta
+ya está abierta y se caería en el aire nada más tomarla. Se suelta
+pellizcando, o cerrando el puño y abriéndolo — igual que una pieza sacada del
+panel de objetos.
+
+Dentro del salón el puntero sale del **centro de la palma**, no de la punta
+del índice: la punta se desploma hacia la palma al cerrar la mano, y un cursor
+que la siguiera haría saltar la pieza en el instante exacto de agarrarla. En
+el lobby sí manda la punta del índice, porque ahí no hay nada que agarrar y
+señalar un portal con el dedo es el gesto que la gente hace sola.
+
+**Pedir la palabra y soltar comparten gesto**, y lo único que los separa es la
+altura. Por eso el detector se congela mientras llevas una pieza: soltar algo
+en alto es abrir la mano en alto, y sin eso pedirías la palabra sin querer
+cada vez que dejas una pieza en la parte de arriba del cuadro. Se congela en
+vez de bajar la mano, porque quien ya la pidió no debería perderla por recoger
+un cubo.
 
 Abrir la mano suelta lo que se agarró cerrando el puño. Una pieza recién sacada
 del panel llega a una mano que nunca se cerró, así que para esa el gesto es el

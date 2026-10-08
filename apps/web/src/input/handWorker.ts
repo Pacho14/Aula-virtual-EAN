@@ -8,6 +8,7 @@
  */
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { classify, GestureStabilizer, type Landmark } from "./gestures";
+import { estimateCameraDistance } from "./handSpace";
 import { HandFilter } from "./oneEuro";
 import type { Gesture } from "./types";
 
@@ -17,7 +18,14 @@ declare const self: {
 };
 
 type InMessage =
-  | { type: "init"; wasmPath: string; modelPath: string; delegate: "GPU" | "CPU" }
+  | {
+      type: "init";
+      wasmPath: string;
+      modelPath: string;
+      delegate: "GPU" | "CPU";
+      /** Ancho/alto del cuadro que va a llegar. Lo necesita la profundidad. */
+      aspect: number;
+    }
   | { type: "frame"; bitmap: ImageBitmap; timestamp: number }
   | { type: "stop" };
 
@@ -33,7 +41,22 @@ export interface WorkerHand {
    */
   ipx: number;
   ipy: number;
-  span: number;
+  /** Distancia a la webcam en metros, o 0 si no se pudo estimar. */
+  distance: number;
+  /**
+   * Velocidades de los cuatro valores de arriba, en unidades por segundo, y
+   * de la distancia en metros por segundo.
+   *
+   * Las calcula el filtro One Euro de paso, y viajan para que el hilo
+   * principal pueda adelantar la posicion por lo que lleve de retraso el
+   * cuadro. Sin esto el cursor va siempre una deteccion por detras de la
+   * mano, que es el retraso que mas se nota de toda la experiencia.
+   */
+  vx: number;
+  vy: number;
+  vix: number;
+  viy: number;
+  vdistance: number;
   gesture: Gesture;
   pinch: number;
   /** Los 21 puntos en crudo de MediaPipe, normalizados a la imagen: x, y, z por punto. */
@@ -57,6 +80,8 @@ declare function postMessage(message: OutMessage, transfer?: Transferable[]): vo
 
 let landmarker: HandLandmarker | null = null;
 let busy = false;
+/** Ancho/alto del cuadro que manda el hilo principal. Lo fija `init`. */
+let aspect = 4 / 3;
 
 const filters: Record<"left" | "right", HandFilter> = {
   left: new HandFilter(),
@@ -72,6 +97,7 @@ self.onmessage = async (event) => {
   const data = event.data;
 
   if (data.type === "init") {
+    aspect = data.aspect;
     try {
       // El segundo argumento pide la variante ES module del runtime. Este
       // worker se crea con type: "module", asi que cargar la variante clasica
@@ -264,13 +290,26 @@ function toHands(
     // 8 es INDEX_FINGER_TIP en la numeracion de MediaPipe (ver LANDMARKS).
     const indexTip = landmarks[8]!;
 
+    // La profundidad se estima sobre los 21 puntos ya aplanados: compara el
+    // tamano aparente en la imagen contra el tamano real en metros, asi que
+    // no se mueve al girar la mano. La cuenta esta en handSpace.ts.
+    const raw = estimateCameraDistance(flat, flatWorld, aspect);
+    // Un 0 significa "sin senal": no se mete en el filtro, o lo arrastraria
+    // hasta cero y la mano se iria al tope de profundidad.
+    const distance = raw > 0 ? filter.distance.filter(raw, timestamp) : 0;
+
     hands.push({
       handedness,
       px: filter.x.filter(c.px, timestamp),
       py: filter.y.filter(c.py, timestamp),
       ipx: filter.ix.filter(indexTip.x, timestamp),
       ipy: filter.iy.filter(indexTip.y, timestamp),
-      span: filter.span.filter(c.span, timestamp),
+      distance,
+      vx: filter.x.velocity,
+      vy: filter.y.velocity,
+      vix: filter.ix.velocity,
+      viy: filter.iy.velocity,
+      vdistance: raw > 0 ? filter.distance.velocity : 0,
       gesture: stabilizers[handedness].push(c.gesture),
       pinch: c.pinch,
       landmarks: flat,

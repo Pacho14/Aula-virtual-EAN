@@ -28,6 +28,8 @@ export class InputLayer {
   private previousGesture: string = "none";
   private raiseSince = 0;
   private handRaised = false;
+  /** Si hay una pieza en la mano. Lo escribe la escena en cada cuadro. */
+  private carrying = false;
 
   get kind() {
     return this.source?.kind ?? "mouse";
@@ -92,6 +94,18 @@ export class InputLayer {
   }
 
   /**
+   * Avisa de si quien usa esto lleva una pieza en la mano.
+   *
+   * Hace falta porque "pedir la palabra" y "soltar" comparten gesto: los dos
+   * son la mano abierta, y lo unico que los separa es la altura. Soltar una
+   * pieza en alto es abrir la mano en alto, asi que sin esto pedir la palabra
+   * se dispararia solo al dejar algo en la parte de arriba del cuadro.
+   */
+  setCarrying(value: boolean) {
+    this.carrying = value;
+  }
+
+  /**
    * Se llama una vez por cuadro de render. Devuelve el cuadro de entrada y, de
    * paso, emite las acciones que se desprenden de los cambios de gesto.
    */
@@ -115,6 +129,15 @@ export class InputLayer {
     }
 
     // Mano arriba sostenida un segundo = pedir la palabra.
+    //
+    // Con una pieza en la mano el detector se congela, y se congela en vez de
+    // bajar la mano: quien ya pidio la palabra no deberia perderla por
+    // recoger un cubo de la mesa.
+    if (this.carrying) {
+      this.raiseSince = 0;
+      return frame;
+    }
+
     const isUp = Boolean(hand) && gesture === "open" && hand!.rawY < RAISE_HEIGHT;
     if (isUp) {
       if (this.raiseSince === 0) this.raiseSince = now;

@@ -89,8 +89,17 @@ export interface HandFrame {
   indexNdcY: number;
   /** Altura cruda en la imagen, 0 arriba y 1 abajo. Para "levantar la mano". */
   rawY: number;
-  /** Tamano aparente de la palma: sirve de proxy de profundidad. */
-  span: number;
+  /**
+   * Distancia de la mano a la webcam, en metros. 0 si no se pudo estimar.
+   *
+   * Sale de comparar el tamaño aparente de la mano en la imagen contra su
+   * tamaño real en `worldLandmarks`, así que no cambia al girar la mano -el
+   * defecto que tenía medirla con una sola distancia 2D. Es lo que le da
+   * profundidad a la mano dentro de la escena: acercarla a la webcam es
+   * alejarla de los propios ojos, así que la mano se adentra. La cuenta y el
+   * porqué del signo están en `handSpace.ts`.
+   */
+  cameraDistance: number;
   gesture: Gesture;
   /** 0 = abierto, 1 = pellizco completo. */
   pinch: number;

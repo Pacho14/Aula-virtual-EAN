@@ -2,6 +2,16 @@
  * La propia mano, dibujada como el esqueleto de 21 puntos de MediaPipe en vez
  * de una esfera.
  *
+ * Dentro del salon esto **es el puntero**: no se dibuja ningun cursor. Las dos
+ * marcas a la vez no funcionan, porque el cursor lleva la ganancia de
+ * cameraSource.ts -para que un movimiento corto alcance toda la pantalla- y
+ * la forma de la mano va en metros reales, sin amplificar: nunca caen en el
+ * mismo sitio. El lobby si lleva cursor, porque alli no se dibuja mano.
+ *
+ * Quien llama a `update` es responsable de anclar el grupo donde toca: ver
+ * `projectHand` en LocalPlayer, que coloca la punta del indice sobre el rayo
+ * y retrocede hasta la muñeca.
+ *
  * Usa `worldLandmarks` -metros reales relativos a la muñeca, ya resueltos
  * por el modelo- y no `landmarks` (normalizado a la imagen). La forma en
  * coordenadas de imagen se encoge o se infla segun que tan cerca este la
@@ -9,32 +19,35 @@
  * ahi con una sola medida (ver versiones anteriores de este archivo) es
  * justo lo que producia manos "fantasma" gigantes o estiradas. Con
  * `worldLandmarks` la proporcion de la mano ya viene resuelta: no hay nada
- * que normalizar.
+ * que normalizar, y aqui no se escala nada. El tamaño en pantalla lo decide
+ * solo la perspectiva, es decir a que profundidad coloque el grupo quien
+ * llame a `update`.
  *
- * Vive en un plano que siempre mira a la camara -como el cursor de
- * HandCursor.tsx-, porque MediaPipe calcula sus landmarks respecto a su
- * propia camara 2D, sin relacion con los ejes de la escena 3D: girar la
- * cabeza no deberia girar la mano con ella.
+ * El grupo se orienta con la camara, y eso no es un truco de cartel: los 21
+ * puntos vienen expresados en los ejes de la camara (ver handSpace.ts), asi
+ * que copiar su giro es exactamente lo que los lleva al mundo. Es tambien lo
+ * correcto en primera persona: la mano va delante de los ojos, asi que girar
+ * la vista la lleva consigo.
+ *
+ * La conversion de ejes esta en handSpace.ts, aparte y sin dependencias, para
+ * poder probarla sin navegador. Importa: negar los tres ejes -que es lo que
+ * hacia este archivo antes- es una reflexion, y dibujaba la mano derecha con
+ * la forma de una izquierda y los dedos estirados apuntando a la propia cara.
  */
 import { forwardRef, useImperativeHandle, useRef } from "react";
 import { Group, Mesh, MeshStandardMaterial, Quaternion, Vector3, type Camera } from "three";
+import { JOINT_COUNT, toViewSpace } from "../input/handSpace";
 import { HAND_CONNECTIONS, type HandFrame } from "../input/types";
 
 export interface HandSkeletonHandle {
   update(hand: HandFrame | null, world: Vector3, camera: Camera, color: string): void;
 }
 
-const JOINT_COUNT = 21;
-/**
- * `worldLandmarks` ya viene en metros reales. Este factor es solo ajuste de
- * estilo -una mano a tamano real se ve pequeña a la distancia fija del
- * cursor-, no una reconstruccion de escala.
- */
-const SCALE = 1.15;
-
 const UP = new Vector3(0, 1, 0);
 const tmpDir = new Vector3();
 const tmpQuat = new Quaternion();
+/** Los 21 puntos ya girados a los ejes de la vista. Se reusa cada cuadro. */
+const viewPoints = new Float32Array(JOINT_COUNT * 3);
 const localPositions: Vector3[] = Array.from({ length: JOINT_COUNT }, () => new Vector3());
 
 export const HandSkeleton = forwardRef<HandSkeletonHandle>(function HandSkeleton(_props, ref) {
@@ -55,20 +68,11 @@ export const HandSkeleton = forwardRef<HandSkeletonHandle>(function HandSkeleton
       g.position.copy(world);
       g.quaternion.copy(camera.quaternion);
 
-      const wl = hand.worldLandmarks;
-      const wx = wl[0]!;
-      const wy = wl[1]!;
-      const wz = wl[2]!;
+      toViewSpace(hand.worldLandmarks, viewPoints);
       for (let i = 0; i < JOINT_COUNT; i++) {
-        // Espejo en X, igual que el resto de la entrada (cameraSource.ts,
-        // el overlay 2D): la captura nunca se espeja antes de MediaPipe, asi
-        // que hay que espejar aqui para que la mano se sienta como un
-        // espejo de verdad. En Z se invierte para que "mas cerca de la
-        // camara" de MediaPipe quede "hacia quien mira" en este grupo, que
-        // es como lo define `HandCursor`.
-        const x = -(wl[i * 3]! - wx) * SCALE;
-        const y = -(wl[i * 3 + 1]! - wy) * SCALE;
-        const z = -(wl[i * 3 + 2]! - wz) * SCALE;
+        const x = viewPoints[i * 3]!;
+        const y = viewPoints[i * 3 + 1]!;
+        const z = viewPoints[i * 3 + 2]!;
         localPositions[i]!.set(x, y, z);
         const mesh = joints.current[i];
         if (mesh) {

@@ -16,7 +16,7 @@ import { Plane, Quaternion, Vector3, type Raycaster } from "three";
 import { pointer, widgets, type Widget } from "./widgets";
 
 /** Cuánto hay que sostener la mano encima de un botón para que se active. */
-const DWELL_MS = 850;
+export const DWELL_MS = 850;
 
 const plane = new Plane();
 const hit = new Vector3();
@@ -81,11 +81,32 @@ export class WidgetPointer {
     pointer.hoveredId = widget.id;
 
     if (widget.kind === "slider") {
-      pointer.dwell = 0;
       if (holding) {
+        pointer.dwell = 0;
         this.dragging = widget;
         pointer.draggingId = widget.id;
         this.dragTo(raycaster);
+        return true;
+      }
+
+      // Espera sostenida sobre el riel: apuntar y quedarse quieto lleva el
+      // deslizador a donde se apunta, igual que sobre un boton o una pieza.
+      // Antes esto era la unica cosa de la interfaz que exigia un gesto si o
+      // si -habia que cerrar la mano para arrastrarlo-, y un gesto es justo
+      // lo que peor se lee cuando el detector va lento.
+      if (!allowDwell) {
+        pointer.dwell = 0;
+        return true;
+      }
+      const dwell = Math.min(1, (now - this.since) / DWELL_MS);
+      pointer.dwell = dwell;
+      if (dwell >= 1) {
+        this.dragTo(raycaster);
+        // Se rearma en vez de bloquearse con `firedFor`: un deslizador se
+        // ajusta varias veces seguidas, al reves que un boton, que no debe
+        // dispararse solo una y otra vez mientras se le mira.
+        this.since = now;
+        pointer.dwell = 0;
       }
       return true;
     }

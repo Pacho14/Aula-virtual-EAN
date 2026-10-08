@@ -112,8 +112,15 @@ export function LandmarkOverlay({
         ctx.fillStyle = color;
         ctx.font = "600 12px system-ui, 'Segoe UI', Roboto, sans-serif";
         ctx.textAlign = mano.handedness === "left" ? "left" : "right";
+        // La distancia estimada va aquí porque es lo único de la profundidad
+        // que no se puede comprobar a ojo: si no se mueve al acercar el brazo,
+        // o si sale un número que no se parece a los centímetros que hay de
+        // verdad hasta la cámara, el que hay que ajustar es `FOCAL` en
+        // input/handSpace.ts. Un cero significa que no se pudo estimar.
+        const metros = mano.cameraDistance;
+        const etiqueta = mano.handedness === "left" ? "Izquierda" : "Derecha";
         ctx.fillText(
-          mano.handedness === "left" ? "Izquierda" : "Derecha",
+          metros > 0 ? `${etiqueta} · ${metros.toFixed(2)} m` : `${etiqueta} · sin profundidad`,
           mano.handedness === "left" ? 8 : ancho - 8,
           alto - 8,
         );

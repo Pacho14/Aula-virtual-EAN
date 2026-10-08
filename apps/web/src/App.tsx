@@ -415,8 +415,8 @@ export default function App() {
         <CameraControls
           input={inputRef.current}
           handTracking={handTracking}
-          // En el lobby se apunta con el dedo índice, así que el puntito de
-          // los controles tiene que señalar lo mismo que el rayo de la escena.
+          // Se apunta con el dedo índice, así que el puntito de los controles
+          // tiene que señalar lo mismo que el rayo de la escena.
           pointWithIndex
           showLandmarks={showLandmarks}
           onToggleLandmarks={setShowLandmarks}
@@ -509,6 +509,11 @@ export default function App() {
       <CameraControls
         input={inputRef.current}
         handTracking={handTracking}
+        // También aquí: el salón apunta con el dedo índice, igual que el
+        // lobby. Sin esto el punto de los deslizadores seguiría a la palma
+        // mientras el rayo de la escena sigue a la punta del dedo, y se
+        // apuntaría a un sitio moviendo otro.
+        pointWithIndex
         showLandmarks={showLandmarks}
         onToggleLandmarks={setShowLandmarks}
         landmarksExpanded={landmarksExpanded}
