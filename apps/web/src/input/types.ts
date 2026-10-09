@@ -20,10 +20,48 @@ export const GESTURE_INDEX: Record<Gesture, number> = {
 export const GESTURE_LABEL: Record<Gesture, string> = {
   none: "sin gesto",
   point: "apuntar",
-  pinch: "seleccionar",
+  pinch: "tomar",
   fist: "agarrar",
   open: "soltar",
 };
+
+/**
+ * Los gestos con los que se **tiene** algo: el puño y el pellizco.
+ *
+ * Viven juntos aquí porque lo que importa de ellos es justo lo que comparten.
+ * Pasar de uno al otro es cambiar de agarre, no soltar: quien cierra el puño
+ * sobre una pieza y luego la pellizca sigue teniéndola. Lo que suelta es salir
+ * de los dos -abrir la mano, o que el detector la pierda a media maniobra.
+ *
+ * Antes solo el puño contaba, así que el pellizco no podía sostener nada: era
+ * un pulso para pulsar botones y se acababa ahí. Ahora pellizcar es la vía
+ * rápida para tomar una pieza -ver `PINCH_HOLD_MS` en LocalPlayer-, y para que
+ * eso funcione, soltar el pellizco tiene que soltar la pieza.
+ *
+ * Lo leen la capa de entrada, que decide cuándo emitir `release`, y la escena,
+ * que decide si abrir la mano ya puede soltar. Tenerlo escrito dos veces sería
+ * tenerlo distinto en cuanto alguien tocara uno de los dos.
+ */
+export const HOLD_GESTURES: ReadonlySet<Gesture> = new Set<Gesture>(["fist", "pinch"]);
+
+/**
+ * Si pasar de un gesto al siguiente es **abrir la mano**, que es lo que suelta.
+ *
+ * Es una línea, y está aquí como función con nombre en vez de incrustada en la
+ * capa de entrada porque es **la** regla de la que depende que una pieza se
+ * caiga a medio camino, y es exactamente la clase de cosa que se rompe sin que
+ * ninguna prueba de posición se entere: la pieza aparece en el suelo y parece
+ * que falló el imán, o el servidor, o la red.
+ *
+ * Es el **flanco**, no el estado: lo que suelta es el gesto de abrir, no estar
+ * abierto. Importa porque una pieza se toma con el contador **apuntando**, y
+ * apuntar es la mano casi abierta: si contara el estado, la pieza se caería en
+ * el mismo instante de tomarla. Abriendo del todo -los cinco dedos- sí hay
+ * flanco, y eso es un gesto que nadie hace sin querer.
+ */
+export function opensHand(previous: Gesture, next: Gesture): boolean {
+  return next === "open" && previous !== "open";
+}
 
 /**
  * Los 21 puntos de MediaPipe, en su orden y con sus nombres.
@@ -134,9 +172,27 @@ export interface InputFrame {
   right: HandFrame | null;
   /** Cuadros por segundo de la deteccion, no del render. */
   detectFps: number;
+  /**
+   * Cuándo se **capturó** la detección de la que sale este cuadro, en el reloj
+   * de `performance.now()`. Cero con mouse, donde no hay nada que capturar.
+   *
+   * Sirve para saber si hay datos nuevos. El render va a 60 y el detector
+   * entre 5 y 24, así que la mayoría de los cuadros de render repiten la misma
+   * medición: quien dibuje algo derivado de ella -la vista de depuración- no
+   * tiene por qué rehacerlo sesenta veces por segundo.
+   */
+  sampledAt: number;
 }
 
-export type InputAction = "select" | "grab" | "release" | "raiseHand" | "lowerHand";
+/**
+ * Lo que la capa de entrada emite. Dos verbos y nada más.
+ *
+ * Solo queda `release`: "la mano se abrió". Tomar ya no pasa por aquí, porque
+ * cada control se toma a su manera -el botón al cerrar la mano, el deslizador
+ * enganchándose, la pieza con el contador- y las tres leen el gesto del cuadro
+ * directamente. Soltar sí es común a todo, y por eso viaja como acción.
+ */
+export type InputAction = "release" | "raiseHand" | "lowerHand";
 
 export interface InputSource {
   readonly kind: "camera" | "mouse";
@@ -147,5 +203,5 @@ export interface InputSource {
 }
 
 export function emptyFrame(source: "camera" | "mouse"): InputFrame {
-  return { source, primary: null, left: null, right: null, detectFps: 0 };
+  return { source, primary: null, left: null, right: null, detectFps: 0, sampledAt: 0 };
 }

@@ -38,35 +38,50 @@ export function WhiteRoom({
 
   return (
     <group>
-      {lit ? (
-        <>
-          {/*
-            Un espacio en blanco se ilumina casi todo con luz ambiente: es
-            difuso, sin sol. Las direccionales solo aportan lo justo para que
-            los objetos tengan volumen.
-          */}
-          <ambientLight intensity={1.55} />
-          <hemisphereLight args={["#ffffff", "#ccd6d5", 1.1]} />
-          <directionalLight position={[2.5, 4, 1.5]} intensity={0.9} />
-          <directionalLight position={[-3, 2.5, -2]} intensity={0.35} />
-        </>
-      ) : (
-        // Con la HDRI iluminando, una pizca de ambiente nada más: evita que
-        // las caras que miran en contra del paisaje queden negras del todo.
-        <ambientLight intensity={0.25} />
-      )}
+      {/*
+        Luz natural: un sol y un cielo. Dos luces, siempre las mismas.
+
+        Antes eran cuatro con la habitación en blanco -ambiente, hemisférica y
+        dos direccionales- y, con un entorno 360 puesto, una ambiente más la
+        iluminación del propio paisaje por mapa de entorno. Cada luz entra en
+        el shader de cada material iluminado, así que eran dos escenas
+        distintas de iluminar y la cara se pagaba justo cuando había un paisaje
+        detrás que ya costaba lo suyo.
+
+        Una direccional hace de sol y da el volumen -sin ella una esfera y un
+        cilindro del mismo color se ven igual-, y la hemisférica hace de cielo:
+        aclara por arriba, oscurece por abajo y evita que las caras en sombra
+        queden negras. Eso es una luz ambiental, pero con dirección, y cuesta
+        lo mismo.
+
+        La intensidad sí cambia según haya paisaje o no, porque con mapeo de
+        tonos ACES la misma luz sale más apagada. Es un número, no una luz más.
+      */}
+      <hemisphereLight args={["#ffffff", "#9fb0ae", lit ? 1.7 : 2.2]} />
+      <directionalLight position={[3, 5, 2]} intensity={lit ? 1 : 1.5} />
+
+      {/*
+        No hay sombras en tiempo real, y es deliberado: lo que hace entender
+        dónde está una pieza aquí es el imán -que la apoya en la mesa o en el
+        piso- y la rejilla del suelo, no una sombra. Un mapa de sombras es una
+        pasada entera de la escena por cuadro para algo que ya se resuelve.
+      */}
 
       {/*
         El suelo se desvanece hacia el borde. Con un entorno 360 detrás, un
         disco de canto duro se ve como una tapa blanca pegada encima de la
         foto; difuminado, el salón se apoya en el paisaje en vez de taparlo.
       */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-        <circleGeometry args={[halfSize, 64]} />
-        <meshStandardMaterial
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+        {/* 48 lados en vez de 64: es un disco plano visto casi de canto. */}
+        <circleGeometry args={[halfSize, 48]} />
+        {/*
+          Lambert y no Standard. El suelo es mate -no tiene brillo especular
+          que mostrar- así que todo el aparato PBR se gastaba en calcular un
+          reflejo que no se ve. `receiveShadow` también se fue: no hay sombras.
+        */}
+        <meshLambertMaterial
           color={lit ? "#EDF1F1" : "#C6CFCF"}
-          roughness={0.92}
-          metalness={0}
           side={DoubleSide}
           alphaMap={fade}
           transparent

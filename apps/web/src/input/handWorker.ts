@@ -5,6 +5,20 @@
  * gesto y suaviza el puntero. Al hilo principal salen el resultado y los 21
  * puntos de cada mano -63 numeros-, nunca el video: el ImageBitmap se cierra
  * aqui mismo en cuanto se procesa.
+ *
+ * De vuelta viaja tambien **cuanto costo la inferencia**. Con ese numero el
+ * hilo principal regula cada cuanto manda un cuadro, que es como el detector
+ * se adapta a un equipo lento sin tener una tabla de telefonos: la regla
+ * entera esta en `CADENCE`, en cameraSource.ts.
+ *
+ * ## Que reloj se usa aqui
+ *
+ * Ninguno propio. `performance.now()` dentro de un worker cuenta desde que el
+ * worker se creo, no desde el documento, asi que un instante medido aqui no se
+ * puede comparar con uno medido alla. Por eso las marcas de tiempo que tocan
+ * el filtrado **llegan desde el hilo principal** -son el instante real de
+ * captura del cuadro- y lo unico que se mide aqui es una *duracion*, que si es
+ * comparable porque es una diferencia.
  */
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { classify, GestureStabilizer, type Landmark } from "./gestures";
@@ -17,6 +31,36 @@ declare const self: {
   postMessage: (message: OutMessage) => void;
 };
 
+/**
+ * Umbrales de confianza del detector.
+ *
+ * Los tres no significan lo mismo, y el primero tiene una consecuencia que
+ * costo encontrar: **`detection` es tambien la puerta por la que entra la
+ * segunda mano.**
+ *
+ * - `detection` decide si aparece una mano que no se estaba siguiendo. Con una
+ *   mano ya detectada, la otra tiene que cruzar este mismo umbral para
+ *   existir. Subirlo a 0,65 -lo que estuvo aqui un rato, buscando menos falsos
+ *   positivos- hacia que la segunda mano costara aparecer, y las dos manos no
+ *   son un lujo de esta aplicacion: son requisito. Se queda en el medio.
+ * - `presence` decide si la mano que ya se seguia sigue ahi. Tambien en el
+ *   medio, y por la misma razon: subirlo suelta antes la mano que esta medio
+ *   tapada por la otra, que es exactamente lo que pasa con dos manos a la vez.
+ * - `tracking` decide si el seguimiento entre cuadros vale o hay que volver a
+ *   correr el detector de palmas, que es la parte cara. Subirlo encarece la
+ *   inferencia sin quitar un solo falso positivo, porque esta puerta solo se
+ *   cruza con una mano ya aceptada.
+ *
+ * Contra los falsos positivos esta `GestureStabilizer`, que pide sostener el
+ * gesto, y la ventana de perdida de cadence.ts. Esos dos filtran ruido sin
+ * cerrarle la puerta a una mano de verdad.
+ */
+const CONFIDENCE = {
+  detection: 0.5,
+  presence: 0.5,
+  tracking: 0.5,
+} as const;
+
 type InMessage =
   | {
       type: "init";
@@ -25,19 +69,28 @@ type InMessage =
       delegate: "GPU" | "CPU";
       /** Ancho/alto del cuadro que va a llegar. Lo necesita la profundidad. */
       aspect: number;
+      numHands: number;
     }
-  | { type: "frame"; bitmap: ImageBitmap; timestamp: number }
+  | {
+      type: "frame";
+      bitmap: ImageBitmap;
+      /**
+       * Instante **real de captura** del cuadro, en el reloj del hilo
+       * principal. No es cuando se mando: ver `capturedAt` en cameraSource.ts.
+       */
+      capturedAt: number;
+    }
   | { type: "stop" };
 
 export interface WorkerHand {
   handedness: "left" | "right";
-  /** Centro de la palma: el origen del puntero dentro del salon. */
+  /** Centro de la palma: lo que no se desplaza al cerrar la mano. */
   px: number;
   py: number;
   /**
-   * Punta del indice. El lobby apunta con esto -es el gesto natural para
-   * señalar un portal-, mientras que dentro del salon manda la palma, que no
-   * se desplaza al cerrar el puño para agarrar algo.
+   * Punta del indice. Con esto se apunta en todas partes -es el gesto natural
+   * para señalar-, mientras que la palma manda en lo que hay que arrastrar sin
+   * que tiemble: ver los rieles de la camara en CameraControls.
    */
   ipx: number;
   ipy: number;
@@ -74,7 +127,16 @@ export interface WorkerHand {
 type OutMessage =
   | { type: "ready"; delegate: "GPU" | "CPU" }
   | { type: "error"; message: string; fatal: boolean }
-  | { type: "hands"; hands: WorkerHand[]; timestamp: number };
+  | {
+      type: "hands";
+      hands: WorkerHand[];
+      /** La marca de captura que llego con el cuadro, devuelta tal cual. */
+      capturedAt: number;
+      /** Lo que tardo `detectForVideo`, en milisegundos. Regula la cadencia. */
+      cost: number;
+      /** Cuantas manos esta buscando el detector ahora mismo. */
+      numHands: number;
+    };
 
 declare function postMessage(message: OutMessage, transfer?: Transferable[]): void;
 
@@ -82,6 +144,19 @@ let landmarker: HandLandmarker | null = null;
 let busy = false;
 /** Ancho/alto del cuadro que manda el hilo principal. Lo fija `init`. */
 let aspect = 4 / 3;
+/**
+ * Cuantas manos busca el detector. Lo fija `init` y no cambia: para buscar
+ * otro numero se levanta un worker nuevo. Ver `build`.
+ */
+let numHands = 2;
+/**
+ * La ultima marca que vio MediaPipe.
+ *
+ * La libreria exige marcas estrictamente crecientes y dos capturas pueden
+ * compartir milisegundo. Se empuja una hacia arriba solo para la libreria; el
+ * filtrado sigue usando la de verdad.
+ */
+let lastTimestamp = 0;
 
 const filters: Record<"left" | "right", HandFilter> = {
   left: new HandFilter(),
@@ -93,33 +168,52 @@ const stabilizers: Record<"left" | "right", GestureStabilizer> = {
 };
 let seen = { left: false, right: false };
 
+/**
+ * Crea el detector. **Una sola vez por worker**, y eso no es una limitacion
+ * que se nos haya pasado por alto: es una de MediaPipe.
+ *
+ * Cerrar una tarea se lleva consigo el modulo WASM del worker, y crear una
+ * segunda despues falla con "ModuleFactory not set" -tampoco sirve volver a
+ * resolver el fileset, lo probamos. Lo tramposo es cuando se nota: a veces no
+ * falla al crear sino en el primer cuadro, asi que todo parece haber ido bien
+ * y lo que queda es un detector que no detecta.
+ *
+ * Por eso cambiar de configuracion -pasar a buscar una sola mano cuando el
+ * equipo no da- se hace levantando un worker nuevo y tirando este. Lo decide
+ * `degradeToOneHand` en cameraSource.ts, que explica lo que cuesta.
+ */
+async function build(wasmPath: string, modelPath: string, delegate: "GPU" | "CPU") {
+  // El segundo argumento pide la variante ES module del runtime. Este worker
+  // se crea con type: "module", asi que cargar la variante clasica no registra
+  // la fabrica del modulo y MediaPipe falla con "ModuleFactory not set".
+  const fileset = await FilesetResolver.forVisionTasks(wasmPath, true);
+  landmarker = await HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: modelPath, delegate },
+    runningMode: "VIDEO",
+    numHands,
+    minHandDetectionConfidence: CONFIDENCE.detection,
+    minHandPresenceConfidence: CONFIDENCE.presence,
+    minTrackingConfidence: CONFIDENCE.tracking,
+  });
+}
+
 self.onmessage = async (event) => {
   const data = event.data;
 
   if (data.type === "init") {
     aspect = data.aspect;
+    numHands = data.numHands;
     try {
-      // El segundo argumento pide la variante ES module del runtime. Este
-      // worker se crea con type: "module", asi que cargar la variante clasica
-      // no registra la fabrica del modulo y MediaPipe falla con
-      // "ModuleFactory not set".
-      const fileset = await FilesetResolver.forVisionTasks(data.wasmPath, true);
-      landmarker = await HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: data.modelPath, delegate: data.delegate },
-        runningMode: "VIDEO",
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
+      await build(data.wasmPath, data.modelPath, data.delegate);
       self.postMessage({ type: "ready", delegate: data.delegate });
     } catch (error) {
-      // El delegado GPU no siempre existe dentro de un worker. El hilo
-      // principal reintenta con CPU al ver fatal: false.
+      // Ni el delegado GPU ni el modelo servido localmente existen siempre.
+      // El hilo principal prueba la siguiente combinacion de su lista al ver
+      // fatal: false; cual es la ultima lo decide alla, no aqui.
       self.postMessage({
         type: "error",
         message: String((error as Error)?.message ?? error),
-        fatal: data.delegate === "CPU",
+        fatal: false,
       });
     }
     return;
@@ -139,12 +233,26 @@ self.onmessage = async (event) => {
     }
     busy = true;
     try {
-      const result = landmarker.detectForVideo(bitmap, data.timestamp);
-      const hands = toHands(result, data.timestamp);
+      const timestamp = Math.max(data.capturedAt, lastTimestamp + 1);
+      lastTimestamp = timestamp;
+
+      // Lo unico que se mide con el reloj del worker, y se mide como
+      // duracion: ver la nota sobre relojes en la cabecera.
+      const startedAt = performance.now();
+      const result = landmarker.detectForVideo(bitmap, timestamp);
+      const cost = performance.now() - startedAt;
+
+      // El filtrado va con la marca **real de captura**, no con la empujada:
+      // el `dt` del filtro One Euro tiene que ser el que de verdad separa dos
+      // cuadros, o el filtro cree que la mano se movio en otro tiempo del que
+      // tardo y calcula mal la velocidad -que es justo lo que usa el hilo
+      // principal para adelantar el puntero.
+      const hands = toHands(result, data.capturedAt);
+
       // Los puntos viajan transferidos, no copiados: son 126 flotantes por
       // mano (imagen + mundo) y hasta 24 veces por segundo.
       postMessage(
-        { type: "hands", hands, timestamp: data.timestamp },
+        { type: "hands", hands, capturedAt: data.capturedAt, cost, numHands },
         hands.flatMap((hand) => [hand.landmarks.buffer, hand.worldLandmarks.buffer]),
       );
     } catch (error) {
@@ -161,6 +269,17 @@ self.onmessage = async (event) => {
 };
 
 /**
+ * Cuanto se recuerda de que lado estaba una muñeca despues de perderla.
+ *
+ * En milisegundos y no en cuadros a proposito: la cadencia de inferencia ahora
+ * se mueve entre 10 y 24 Hz segun lo que aguante el equipo, asi que "ocho
+ * cuadros" -lo que decia antes- significaria 800 ms en un celular lento y
+ * 330 ms en un portatil. Un umbral contado en cuadros es un umbral que cambia
+ * de significado solo.
+ */
+const WRIST_MEMORY_MS = 350;
+
+/**
  * A que lado pertenecia la muñeca que estaba en cada posicion, cuadro a
  * cuadro. MediaPipe decide "Left"/"Right" mano por mano y por cuadro, sin
  * memoria: una mano en un angulo ambiguo puede cambiar de etiqueta de un
@@ -170,7 +289,7 @@ self.onmessage = async (event) => {
  * proyecto.
  */
 const wristMemory: { left?: { x: number; y: number }; right?: { x: number; y: number } } = {};
-const wristLost = { left: 0, right: 0 };
+const wristSeenAt = { left: 0, right: 0 };
 
 interface Candidate {
   index: number;
@@ -179,7 +298,10 @@ interface Candidate {
   raw: "left" | "right";
 }
 
-function assignSides(candidates: Candidate[]): Partial<Record<"left" | "right", number>> {
+function assignSides(
+  candidates: Candidate[],
+  timestamp: number,
+): Partial<Record<"left" | "right", number>> {
   const slots: Partial<Record<"left" | "right", number>> = {};
   const used = new Set<number>();
 
@@ -187,7 +309,7 @@ function assignSides(candidates: Candidate[]): Partial<Record<"left" | "right", 
   // sin importar lo que diga la etiqueta de MediaPipe en este cuadro.
   for (const side of ["left", "right"] as const) {
     const prev = wristMemory[side];
-    if (!prev || wristLost[side] > 8) continue;
+    if (!prev || timestamp - wristSeenAt[side] > WRIST_MEMORY_MS) continue;
     let best = -1;
     let bestDistance = 0.2;
     for (const candidate of candidates) {
@@ -223,13 +345,13 @@ function assignSides(candidates: Candidate[]): Partial<Record<"left" | "right", 
 
   for (const side of ["left", "right"] as const) {
     const index = slots[side];
-    const candidate = index !== undefined ? candidates.find((item) => item.index === index) : undefined;
+    const candidate =
+      index !== undefined ? candidates.find((item) => item.index === index) : undefined;
     if (candidate) {
       wristMemory[side] = { x: candidate.x, y: candidate.y };
-      wristLost[side] = 0;
-    } else {
-      wristLost[side] += 1;
-      if (wristLost[side] > 8) delete wristMemory[side];
+      wristSeenAt[side] = timestamp;
+    } else if (timestamp - wristSeenAt[side] > WRIST_MEMORY_MS) {
+      delete wristMemory[side];
     }
   }
 
@@ -253,10 +375,15 @@ function toHands(
     // "Left"/"Right" ya coincide con la mano real de quien la mueve -esta
     // etiqueta cruda es solo el punto de partida; `assignSides` decide.
     const raw = result.handedness[i]?.[0]?.categoryName ?? "Right";
-    candidates.push({ index: i, x: landmarks[0]!.x, y: landmarks[0]!.y, raw: raw === "Left" ? "left" : "right" });
+    candidates.push({
+      index: i,
+      x: landmarks[0]!.x,
+      y: landmarks[0]!.y,
+      raw: raw === "Left" ? "left" : "right",
+    });
   }
 
-  const slots = assignSides(candidates);
+  const slots = assignSides(candidates, timestamp);
   const present = { left: slots.left !== undefined, right: slots.right !== undefined };
   const hands: WorkerHand[] = [];
 
@@ -293,10 +420,10 @@ function toHands(
     // La profundidad se estima sobre los 21 puntos ya aplanados: compara el
     // tamano aparente en la imagen contra el tamano real en metros, asi que
     // no se mueve al girar la mano. La cuenta esta en handSpace.ts.
-    const raw = estimateCameraDistance(flat, flatWorld, aspect);
+    const rawDistance = estimateCameraDistance(flat, flatWorld, aspect);
     // Un 0 significa "sin senal": no se mete en el filtro, o lo arrastraria
     // hasta cero y la mano se iria al tope de profundidad.
-    const distance = raw > 0 ? filter.distance.filter(raw, timestamp) : 0;
+    const distance = rawDistance > 0 ? filter.distance.filter(rawDistance, timestamp) : 0;
 
     hands.push({
       handedness,
@@ -309,8 +436,8 @@ function toHands(
       vy: filter.y.velocity,
       vix: filter.ix.velocity,
       viy: filter.iy.velocity,
-      vdistance: raw > 0 ? filter.distance.velocity : 0,
-      gesture: stabilizers[handedness].push(c.gesture),
+      vdistance: rawDistance > 0 ? filter.distance.velocity : 0,
+      gesture: stabilizers[handedness].push(c.gesture, timestamp),
       pinch: c.pinch,
       landmarks: flat,
       worldLandmarks: flatWorld,

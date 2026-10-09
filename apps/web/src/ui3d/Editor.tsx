@@ -121,6 +121,32 @@ export function Editor({
     }
   });
 
+  /**
+   * Manda ya lo que haya pendiente, sin esperar el turno de los 20 Hz.
+   *
+   * Hay que llamarlo **antes de abrir la clase**, y no por pulcritud: ahí un
+   * ajuste sin mandar no es 50 ms de retraso, es un ajuste **perdido**. Los
+   * mensajes llegan en orden, así que `publish` entra primero, y a partir de
+   * ese momento el servidor descarta los cambios de entorno sin decir nada
+   * -ver la guarda `canEdit` en AulaRoom, que es correcta: el paisaje no se
+   * mueve con la clase dada.
+   *
+   * El resultado era que el profesor dejaba el paisaje donde lo quería, pulsaba
+   * comenzar, y la clase abría con el paisaje de un instante antes. Lo que arma
+   * tiene que ser lo que se entrega, y el último empujón del deslizador cuenta.
+   */
+  const flushEnv = useCallback(() => {
+    if (!pending.current) return;
+    room.send("env", pending.current);
+    pending.current = null;
+    sentAt.current = performance.now();
+  }, [room]);
+
+  const publish = useCallback(() => {
+    flushEnv();
+    room.send("publish");
+  }, [flushEnv, room]);
+
   // Al salir del editor la predicción se apaga: de ahí en adelante manda el
   // estado de la sala, que es lo que ven todos los demás.
   useEffect(() => {
@@ -177,7 +203,7 @@ export function Editor({
           envLabel={catalog.find((e) => e.id === applied)?.label ?? "Habitación en blanco"}
           pieces={pieces.map((id) => room.state.objects.get(id)?.label ?? "Pieza")}
           onBack={() => setPreview(false)}
-          onStart={() => room.send("publish")}
+          onStart={publish}
         />
       </group>
     );

@@ -31,6 +31,8 @@ const CORREO = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export function JoinScreen({
   onJoin,
   onLobby,
+  onMode,
+  mode,
   busy,
   status,
   error,
@@ -39,12 +41,20 @@ export function JoinScreen({
   onJoin: (pin: string, alias: string, mode: InputMode, hostToken: string) => void;
   /** Entrada del estudiante al lobby: todavía no tiene ningún código. */
   onLobby: (identity: { email: string; displayName: string }, mode: InputMode) => void;
+  /**
+   * Elegir cómo se controla **arranca la entrada en el acto**.
+   *
+   * El modo vive fuera de esta pantalla porque encender la cámara aquí es lo
+   * que permite probar las manos antes de entrar a nada, y porque si la cámara
+   * falla, quien decide volver a mouse es quien la arrancó, no este formulario.
+   */
+  onMode: (mode: InputMode) => void;
+  mode: InputMode;
   busy: boolean;
   status: string;
   error: string | null;
 }) {
   const [tab, setTab] = useState<"student" | "teacher">("student");
-  const [mode, setMode] = useState<InputMode>("camera");
 
   // --- estudiante ---------------------------------------------------------
   const [email, setEmail] = useState("");
@@ -331,14 +341,14 @@ export function JoinScreen({
               <button
                 type="button"
                 className={mode === "camera" ? "on" : ""}
-                onClick={() => setMode("camera")}
+                onClick={() => onMode("camera")}
               >
                 Manos con cámara
               </button>
               <button
                 type="button"
                 className={mode === "mouse" ? "on" : ""}
-                onClick={() => setMode("mouse")}
+                onClick={() => onMode("mouse")}
               >
                 Mouse o toque
               </button>

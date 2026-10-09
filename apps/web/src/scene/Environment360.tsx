@@ -89,7 +89,11 @@ export function Environment360({
         loaded.generateMipmaps = true;
         loaded.minFilter = LinearMipmapLinearFilter;
         loaded.magFilter = LinearFilter;
-        loaded.anisotropy = gl.capabilities.getMaxAnisotropy();
+        // Acotada, no al maximo. El maximo de la tarjeta suele ser 16x, y son
+        // dieciseis muestras por pixel sobre una textura de coma flotante que
+        // ocupa **toda** la pantalla de fondo. En una esfera lejana la
+        // diferencia entre 4x y 16x no se ve; el costo si se nota.
+        loaded.anisotropy = Math.min(4, gl.capabilities.getMaxAnisotropy());
         setTexture(loaded);
         onStatus({ state: "ready", id: envId });
       },
@@ -118,31 +122,37 @@ export function Environment360({
   }, [texture]);
 
   /**
-   * La luz de la escena sale de la propia HDRI, y con ella entra el mapeo de
-   * tonos ACES: sin él, un cielo de atardecer llega con valores muy por
-   * encima de 1 y se ve como una mancha blanca. Sin entorno se vuelve al
-   * render plano, que es lo que mantiene blanca la habitación en blanco.
+   * El entorno es **fondo, no luz**.
+   *
+   * Aquí se usaba además como fuente de iluminación: `scene.environment`, con
+   * lo que cada material PBR de la escena muestreaba el mapa de entorno en
+   * cada píxel. Y no era solo el muestreo: asignar `scene.environment` hace
+   * que three genere un **PMREM** -un mapa de entorno prefiltrado, con varias
+   * pasadas de desenfoque a textura- cada vez que la foto cambia. Todo eso
+   * para iluminar una mesa, tres cubos y unos avatares de colores planos.
+   *
+   * Ahora la luz la ponen dos luces fijas (ver WhiteRoom) y esta foto solo se
+   * ve. El resultado es parecido y el coste por cuadro es otro: sin PMREM, sin
+   * muestreos de entorno y sin materiales PBR.
+   *
+   * El mapeo de tonos sí se queda mientras haya foto, y no es lo mismo: es una
+   * cuenta por píxel en el shader, barata, y sin ella un cielo con valores muy
+   * por encima de 1 se ve como una mancha blanca. Sin foto se vuelve al render
+   * plano, que es lo que mantiene blanca la habitación en blanco.
    */
   useEffect(() => {
     if (texture) {
-      scene.environment = texture;
-      // Bajo a proposito. Una HDRI de exterior trae mucha mas luz que un
-      // salon, y a intensidad plena las superficies claras se saturan: la
-      // mesa queda blanca y las piezas encima dejan de distinguirse de ella.
-      scene.environmentIntensity = 0.55;
       gl.toneMapping = ACESFilmicToneMapping;
       gl.toneMappingExposure = 0.78;
     } else {
-      scene.environment = null;
       gl.toneMapping = NoToneMapping;
       gl.toneMappingExposure = 1;
     }
     return () => {
-      scene.environment = null;
       gl.toneMapping = NoToneMapping;
       gl.toneMappingExposure = 1;
     };
-  }, [gl, scene, texture]);
+  }, [gl, texture]);
 
   // La colocación llega en el estado a 20 Hz mientras el profesor arrastra un
   // control, así que se lee aquí y no por React.

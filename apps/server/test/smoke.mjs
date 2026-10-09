@@ -31,6 +31,25 @@ const ok = async (path, body) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * En que salon monta su clase esta prueba.
+ *
+ * Se puede cambiar con la variable SALON, igual que en `test:navegador` y por
+ * el mismo motivo: si estas probando a mano justo en ese salon, la prueba no
+ * puede abrir y falla entera por algo que no tiene que ver con lo que
+ * probabas. `SALON=3 npm run smoke -w @aula/server` la manda a otro.
+ */
+const SALON = Number(process.env.SALON ?? 2);
+/**
+ * Un salon distinto del de la prueba.
+ *
+ * Hace falta para comprobar que un codigo no sirve en el portal equivocado, y
+ * tiene que derivarse de SALON y no ser un numero fijo: con el 3 escrito a
+ * mano, correr la prueba en el salon 3 convertia el "portal equivocado" en el
+ * correcto y la comprobacion fallaba por existir, no por un fallo real.
+ */
+const OTRO = SALON === 3 ? 1 : 3;
+
 let fallos = 0;
 const check = (pasa, label, extra = "") => {
   console.log(`${pasa ? "  OK " : "FALLO"}  ${label}${extra ? ` -> ${extra}` : ""}`);
@@ -39,9 +58,18 @@ const check = (pasa, label, extra = "") => {
 
 // --- el salon se crea con nombre y cupo ---------------------------------
 console.log("Creacion");
+
+// Antes de crear nada: el salon que va a usar esta prueba tiene que salir
+// libre. Se comprueba sobre **el propio salon** y no sobre otro cualquiera,
+// porque "otro cualquiera" exige un salon de repuesto sin clase, y con alguien
+// probando a mano en el equipo puede no haberlo: la prueba fallaba entonces
+// por el estado de la maquina y no por el codigo.
+const lobbyAntes = await fetch(API + "/api/lobby").then((r) => r.json());
+const propio = lobbyAntes.salones.find((s) => s.salon === SALON);
+check(propio?.estado === "libre", "un salon sin clase sale libre", propio?.estado);
 const session = await ok("/api/sessions", {
   code: CODE,
-  salon: 2,
+  salon: SALON,
   roomName: "Mantenimiento de valvulas",
   students: 4,
   minutos: 90,
@@ -49,10 +77,10 @@ const session = await ok("/api/sessions", {
 console.log("  codigo generado:", session.pin);
 check(session.roomName === "Mantenimiento de valvulas", "guarda el nombre", session.roomName);
 check(session.students === 4, "guarda cuantos estudiantes", String(session.students));
-check(session.salon === 2, "guarda en que salon", String(session.salon));
+check(session.salon === SALON, "guarda en que salon", String(session.salon));
 check(session.minutos === 90, "guarda cuanto dura", String(session.minutos));
 
-const repetido = await post("/api/sessions", { code: CODE, salon: 2, roomName: "Otra" });
+const repetido = await post("/api/sessions", { code: CODE, salon: SALON, roomName: "Otra" });
 check(repetido.status === 409, "un salon no admite dos clases a la vez", `HTTP ${repetido.status}`);
 
 const sinSalon = await post("/api/sessions", { code: CODE, roomName: "Sin salon" });
@@ -70,7 +98,7 @@ const profe = await ok("/api/join", {
   hostToken: session.hostToken,
 });
 check(profe.role === "teacher", "el profesor si entra", profe.role);
-check(profe.salon === 2, "y sabe en que salon esta", String(profe.salon));
+check(profe.salon === SALON, "y sabe en que salon esta", String(profe.salon));
 
 const scene = profe.scene;
 check(scene.spots.length === 5, "cuatro puestos de alumno mas el del profesor", `${scene.spots.length}`);
@@ -89,7 +117,7 @@ check(salaProfe.state.pin === session.pin, "el salon lleva su PIN en el estado",
 // --- entorno 360 --------------------------------------------------------
 console.log("\nLobby");
 const lobbyArmando = await fetch(API + "/api/lobby").then((r) => r.json());
-const dos = lobbyArmando.salones.find((s) => s.salon === 2);
+const dos = lobbyArmando.salones.find((s) => s.salon === SALON);
 check(dos?.estado === "preparando", "el salon 2 aparece preparandose", dos?.estado);
 check(dos?.clase === "Mantenimiento de valvulas", "con el nombre de la clase", dos?.clase);
 check(dos?.minutos === 90, "y con su duracion", String(dos?.minutos));
@@ -97,8 +125,6 @@ check(
   !JSON.stringify(lobbyArmando).includes(session.pin),
   "el lobby no reparte el codigo de nadie",
 );
-const uno = lobbyArmando.salones.find((s) => s.salon === 1);
-check(uno?.estado === "libre", "un salon sin clase sale libre", uno?.estado);
 
 console.log("\nEntorno");
 const catalogo = await fetch(API + "/api/environments").then((r) => r.json());
@@ -202,11 +228,11 @@ check(salaProfe.state.phase === "live", "la sala pasa a en vivo", salaProfe.stat
 const otroSalon = await post("/api/join", {
   pin: session.pin,
   alias: "Estudiante",
-  salon: 3,
+  salon: OTRO,
 });
 check(otroSalon.status === 404, "el codigo no sirve en el portal equivocado", `HTTP ${otroSalon.status}`);
 
-const alumno = await ok("/api/join", { pin: session.pin, alias: "Estudiante", salon: 2 });
+const alumno = await ok("/api/join", { pin: session.pin, alias: "Estudiante", salon: SALON });
 check(alumno.role === "student", "ahora si entra un estudiante", alumno.role);
 
 const clienteAlumno = new Client(API);
@@ -241,7 +267,7 @@ check(salaProfe.state.objects.size === antes, "ni el profesor, con la clase ya a
 
 // --- pose ---------------------------------------------------------------
 const lobbyVivo = await fetch(API + "/api/lobby").then((r) => r.json());
-const enCurso = lobbyVivo.salones.find((s) => s.salon === 2);
+const enCurso = lobbyVivo.salones.find((s) => s.salon === SALON);
 check(enCurso?.estado === "en-curso", "el salon 2 pasa a clase en curso", enCurso?.estado);
 check(enCurso?.transcurridos !== null, "y empieza a contar el tiempo", String(enCurso?.transcurridos));
 
@@ -286,10 +312,10 @@ console.log("\nCerrar");
 salaProfe.send("close");
 await sleep(1200);
 const lobbyFinal = await fetch(API + "/api/lobby").then((r) => r.json());
-const cerrado = lobbyFinal.salones.find((s) => s.salon === 2);
+const cerrado = lobbyFinal.salones.find((s) => s.salon === SALON);
 check(cerrado?.estado === "libre", "el salon queda libre para la clase siguiente", cerrado?.estado);
 
-const despues = await post("/api/sessions", { code: CODE, salon: 2, roomName: "La siguiente" });
+const despues = await post("/api/sessions", { code: CODE, salon: SALON, roomName: "La siguiente" });
 check(despues.status === 200, "y otro profesor ya puede abrir ahi", `HTTP ${despues.status}`);
 if (despues.status === 200) {
   // Y se cierra tambien: esta prueba no deja salones ocupados detras.

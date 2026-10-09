@@ -42,6 +42,7 @@
 /** Índices de MediaPipe que hacen falta aquí. Misma numeración que `LANDMARKS`. */
 const WRIST = 0;
 const INDEX_MCP = 5;
+const MIDDLE_MCP = 9;
 const PINKY_MCP = 17;
 
 export const JOINT_COUNT = 21;
@@ -95,6 +96,40 @@ export function jointInViewSpace(world: Float32Array, joint: number, out: Vec3):
   out[0] = VIEW_SIGN_X * (world[joint * 3]! - world[WRIST * 3]!);
   out[1] = VIEW_SIGN_Y * (world[joint * 3 + 1]! - world[WRIST * 3 + 1]!);
   out[2] = VIEW_SIGN_Z * (world[joint * 3 + 2]! - world[WRIST * 3 + 2]!);
+  return out;
+}
+
+/**
+ * Los cuatro puntos cuyo promedio es el centro de la palma.
+ *
+ * Los mismos que usa `classify` para el puntero de la palma, y tienen que ser
+ * los mismos: si uno promediara cuatro puntos y el otro tres, el rayo saldría
+ * de un sitio y la mano se dibujaría anclada a otro, con la pieza cayendo
+ * donde no se apuntaba. De ahí que haya una prueba que los compara.
+ */
+const PALM = [WRIST, INDEX_MCP, MIDDLE_MCP, PINKY_MCP] as const;
+
+/**
+ * Centro de la palma, relativo a la muñeca y en los ejes de la vista.
+ *
+ * Es el ancla de la mano dibujada **mientras se lleva una pieza**. El resto
+ * del tiempo se ancla por la punta del índice, que es con lo que se apunta;
+ * pero la punta se desploma hacia la palma al abrir y cerrar la mano, así que
+ * con una pieza tomada el propio gesto de soltar la movería justo al soltarla.
+ * El centro de la palma no se mueve con los dedos.
+ */
+export function palmInViewSpace(world: Float32Array, out: Vec3): Vec3 {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  for (const joint of PALM) {
+    x += world[joint * 3]! - world[WRIST * 3]!;
+    y += world[joint * 3 + 1]! - world[WRIST * 3 + 1]!;
+    z += world[joint * 3 + 2]! - world[WRIST * 3 + 2]!;
+  }
+  out[0] = (VIEW_SIGN_X * x) / PALM.length;
+  out[1] = (VIEW_SIGN_Y * y) / PALM.length;
+  out[2] = (VIEW_SIGN_Z * z) / PALM.length;
   return out;
 }
 

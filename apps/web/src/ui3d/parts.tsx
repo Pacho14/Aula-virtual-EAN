@@ -136,6 +136,9 @@ export function Button3D({
     material.color.lerp(hovered ? lit : base, 1 - Math.exp(-14 * delta));
     material.opacity = disabled ? 0.35 : 1;
 
+    // La barra que se llena mientras corre el contador. Va en el propio botón
+    // además del anillo del cursor: el anillo dice *cuánto falta* y la barra
+    // dice *de qué control*, que con cuatro botones en fila no es lo mismo.
     const progress = hovered ? pointer.dwell : 0;
     const strip = bar.current;
     if (strip) {

@@ -96,30 +96,42 @@ function clamp01(v: number) {
 }
 
 /**
- * Histeresis temporal: un gesto solo se acepta despues de repetirse varios
- * cuadros seguidos. Sin esto, un cuadro con ruido dispara un clic falso.
+ * Histeresis temporal: un gesto solo se acepta despues de sostenerse un rato.
+ * Sin esto, un cuadro con ruido dispara un clic falso.
+ *
+ * Se mide en **milisegundos y no en cuadros**. Antes eran tres cuadros, que es
+ * un umbral que cambia de significado solo: la cadencia de inferencia ahora se
+ * mueve entre 10 y 24 Hz segun lo que aguante el equipo, asi que tres cuadros
+ * son 300 ms en un celular lento y 125 ms en un portatil. El tiempo que una
+ * persona tarda en hacer un gesto a proposito no depende de eso.
+ *
+ * 100 ms es el pulso: por debajo entra el ruido de un cuadro suelto, y por
+ * encima el pellizco empieza a sentirse perezoso -se suma al tiempo que ya
+ * cuesta reconocerlo y a la confirmacion de `PINCH_HOLD_MS` en LocalPlayer.
  */
+const HOLD_MS = 100;
+
 export class GestureStabilizer {
   private candidate: Gesture = "none";
-  private streak = 0;
+  private since = 0;
   private committed: Gesture = "none";
 
-  constructor(private readonly frames = 3) {}
+  constructor(private readonly holdMs = HOLD_MS) {}
 
-  push(gesture: Gesture): Gesture {
-    if (gesture === this.candidate) {
-      this.streak += 1;
-    } else {
+  push(gesture: Gesture, timestampMs: number): Gesture {
+    if (gesture !== this.candidate) {
       this.candidate = gesture;
-      this.streak = 1;
+      this.since = timestampMs;
     }
-    if (this.streak >= this.frames) this.committed = this.candidate;
+    // El `>=` importa: con un solo cuadro la diferencia es 0 y un umbral
+    // estricto no aceptaria nunca el primer gesto de una mano recien vista.
+    if (timestampMs - this.since >= this.holdMs) this.committed = this.candidate;
     return this.committed;
   }
 
   reset() {
     this.candidate = "none";
     this.committed = "none";
-    this.streak = 0;
+    this.since = 0;
   }
 }

@@ -6,7 +6,7 @@ import {
   LinearFilter,
   MathUtils,
   type Mesh,
-  type MeshStandardMaterial,
+  type MeshLambertMaterial,
   type Sprite,
 } from "three";
 import type { AulaRoom } from "../net/room";
@@ -105,7 +105,7 @@ function SceneObjectMesh({
       labelRef.current.position.set(mesh.position.x, mesh.position.y + object.sy / 2 + 0.16, mesh.position.z);
     }
 
-    const material = mesh.material as MeshStandardMaterial;
+    const material = mesh.material as MeshLambertMaterial;
     const held = object.heldBy !== "";
     const heldByMe = object.heldBy === sessionId;
     const hovered = hoveredRef.current === id && !held;
@@ -151,7 +151,7 @@ function SceneObjectMesh({
         ) : (
           <boxGeometry args={[state.sx, state.sy, state.sz]} />
         )}
-        <meshStandardMaterial color={state.color} roughness={0.55} metalness={0.05} />
+        <meshLambertMaterial color={state.color} />
       </mesh>
       {labelTexture && (
         <sprite ref={labelRef} scale={[0.5, 0.125, 1]}>

@@ -155,7 +155,16 @@ export function makeScene(
     salon: options.salon ?? 1,
     roomName: (options.roomName ?? "").trim().slice(0, 48) || "Clase sin nombre",
     students,
-    bounds: { halfSize: 4, height: 3 },
+    // El doble de lo que medía antes (era 4). El suelo es lo que le da al ojo
+    // la escala que la mano no alcanza a dar -ver la rejilla en WhiteRoom-, y
+    // con un entorno 360 detrás, un suelo corto hace que el paisaje arranque
+    // casi a los pies y el salón se sienta como una tarima.
+    //
+    // Esto solo agranda el **espacio**: la zona del imán (`PLACEMENT`) y la
+    // mesa se quedan igual a propósito, así que ninguna pieza cambia de sitio
+    // y el imán sigue encajando donde encajaba. Repartir los puestos más
+    // lejos sería otra cosa, y habría que moverlo en `makeSpots`.
+    bounds: { halfSize: 8, height: 3 },
     focus: [0, 1.1, 0],
     placement: PLACEMENT,
     assets: [{ ...TABLE }],

@@ -135,7 +135,7 @@ function Avatar({
       <group ref={headRef} position={[player.hx, player.hy, player.hz]}>
         <mesh>
           <boxGeometry args={[0.2, 0.235, 0.2]} />
-          <meshStandardMaterial color={color} roughness={0.6} />
+          <meshLambertMaterial color={color} />
         </mesh>
         {/* Visor: marca hacia donde mira la cabeza. */}
         <mesh position={[0, 0.015, -0.101]}>
@@ -159,27 +159,27 @@ function Avatar({
 
       <mesh ref={leftUpper}>
         <cylinderGeometry args={[0.5, 0.5, 1, 10]} />
-        <meshStandardMaterial color={color} roughness={0.7} />
+        <meshLambertMaterial color={color} />
       </mesh>
       <mesh ref={rightUpper}>
         <cylinderGeometry args={[0.5, 0.5, 1, 10]} />
-        <meshStandardMaterial color={color} roughness={0.7} />
+        <meshLambertMaterial color={color} />
       </mesh>
       <mesh ref={leftArm}>
         <cylinderGeometry args={[0.5, 0.5, 1, 10]} />
-        <meshStandardMaterial color={color} roughness={0.7} />
+        <meshLambertMaterial color={color} />
       </mesh>
       <mesh ref={rightArm}>
         <cylinderGeometry args={[0.5, 0.5, 1, 10]} />
-        <meshStandardMaterial color={color} roughness={0.7} />
+        <meshLambertMaterial color={color} />
       </mesh>
       <mesh ref={leftHand}>
         <sphereGeometry args={[0.052, 12, 10]} />
-        <meshStandardMaterial color={color} roughness={0.55} />
+        <meshLambertMaterial color={color} />
       </mesh>
       <mesh ref={rightHand}>
         <sphereGeometry args={[0.052, 12, 10]} />
-        <meshStandardMaterial color={color} roughness={0.55} />
+        <meshLambertMaterial color={color} />
       </mesh>
     </group>
   );

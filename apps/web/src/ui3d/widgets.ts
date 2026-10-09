@@ -15,7 +15,7 @@ export interface Widget {
   kind: WidgetKind;
   object: Object3D | null;
   disabled: boolean;
-  /** Botones: pellizco, o mano sostenida encima. */
+  /** Botones: se dispara al cerrar la mano encima. */
   activate?(): void;
   /** Deslizadores: posición normalizada sobre el riel, de 0 a 1. */
   drag?(t: number): void;
@@ -31,7 +31,7 @@ export const widgets = new Map<string, Widget>();
  */
 export const pointer = {
   hoveredId: null as string | null,
-  /** Avance de la espera sostenida sobre un botón, de 0 a 1. */
+  /** Avance del contador sobre el control apuntado, de 0 a 1. */
   dwell: 0,
   /** Deslizador que la mano tiene tomado ahora mismo. */
   draggingId: null as string | null,

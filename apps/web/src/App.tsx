@@ -60,6 +60,8 @@ export default function App() {
 
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [mode, setMode] = useState<InputMode>("camera");
+  /** Si la fuente de entrada ya está arrancada. Ver `handTracking`. */
+  const [inputLive, setInputLive] = useState(false);
   const [showLandmarks, setShowLandmarks] = useState(true);
   const [landmarksExpanded, setLandmarksExpanded] = useState(false);
 
@@ -150,20 +152,33 @@ export default function App() {
 
   /** Arranca la cámara o el mouse. Si la cámara falla, se entra con mouse. */
   const startInput = useCallback(async (wanted: InputMode) => {
+    // Ya corriendo lo que se pide: no se toca. Esto importa desde que la
+    // cámara se enciende en la pantalla de entrada, porque entrar a la
+    // experiencia vuelve a pedir el mismo modo: sin este guardia la cámara se
+    // apagaba y volvía a arrancar justo al entrar -un par de segundos sin
+    // manos, el worker recargado y, en algunos navegadores, el permiso otra
+    // vez.
+    if (inputRef.current.running && inputRef.current.kind === wanted) return null;
+
     if (wanted === "mouse") {
       await inputRef.current.useMouse();
+      setInputLive(true);
       return null;
     }
     try {
-      // No es un objetivo sino un techo: quien marca el ritmo real es el
-      // detector, que pide el siguiente cuadro apenas termina el anterior.
-      await inputRef.current.useCamera({ onStatus: setStatus, targetFps: 60 });
+      // Sin cadencia que pasarle: la decide el propio detector midiendo lo
+      // que cuesta una inferencia en este equipo. Ver `CADENCE` en
+      // input/cameraSource.ts -el numero que habia aqui no llegaba a
+      // aplicarse nunca en la rama que de verdad corre.
+      await inputRef.current.useCamera({ onStatus: setStatus });
+      setInputLive(true);
       return null;
     } catch (problem) {
       // Que falle la cámara no puede dejar a nadie fuera: se entra con mouse y
       // se avisa. Es el modo de respaldo que pide la sección 10 del documento.
       console.warn("[entrada] la cámara no arrancó:", problem);
       await inputRef.current.useMouse();
+      setInputLive(true);
       // Sin esto, "mode" se queda en "camera" aunque ya se haya caído a
       // mouse: la interfaz sigue hablando de gestos y de pellizco, y los
       // controles de cámara siguen en pantalla, como si hubiera camara.
@@ -317,26 +332,85 @@ export default function App() {
     };
   }, []);
 
-  const handTracking = mode === "camera";
+  /**
+   * Si los controles de la mano pueden funcionar ya.
+   *
+   * No basta con que el modo elegido sea cámara: hace falta que la fuente esté
+   * de verdad arrancada, porque el bucle de los rieles lee el último cuadro
+   * del detector. En la pantalla de entrada las dos cosas se separan -se
+   * elige el modo antes de que exista la fuente-, y antes no hacía falta
+   * distinguirlas porque la cámara arrancaba justo antes de la primera
+   * pantalla que las usaba.
+   */
+  const handTracking = mode === "camera" && inputLive;
   const salonAbierto = salones.find((s) => s.salon === openSalon) ?? null;
 
   // --- pantalla de entrada --------------------------------------------------
   if (phase === "join" || (phase === "connecting" && !identity)) {
     return (
-      <JoinScreen
-        onJoin={(enteredPin, alias, wanted, hostToken) =>
-          void enterRoom({
-            pin: enteredPin,
-            alias,
-            hostToken,
-            startInputAs: wanted,
-          })
-        }
-        onLobby={(who, wanted) => void enterLobby(who, wanted)}
-        busy={phase === "connecting"}
-        status={status}
-        error={error}
-      />
+      // `con-rieles` le hace sitio a los deslizadores: esta pantalla es la
+      // única con un formulario debajo, y los rieles flotan fijos sobre todo.
+      <div className={handTracking ? "stage con-rieles" : "stage"}>
+        <JoinScreen
+          onJoin={(enteredPin, alias, wanted, hostToken) =>
+            void enterRoom({
+              pin: enteredPin,
+              alias,
+              hostToken,
+              startInputAs: wanted,
+            })
+          }
+          onLobby={(who, wanted) => void enterLobby(who, wanted)}
+          // Elegir cámara la enciende aquí mismo, antes de entrar a nada.
+          //
+          // Es lo que hace que los deslizadores de esta pantalla funcionen de
+          // verdad, y de paso arregla algo que estaba al revés: la cámara
+          // arrancaba **después** de identificarse, así que quien tuviera el
+          // permiso bloqueado, la webcam ocupada o mala luz se enteraba con la
+          // sesión ya empezada. Ahora se entera antes de escribir su correo, y
+          // si falla, la propia pantalla cae a mouse y lo dice.
+          onMode={(wanted) => {
+            setMode(wanted);
+            void startInput(wanted).then((aviso) => {
+              if (aviso) setNotice(aviso);
+            });
+          }}
+          mode={mode}
+          busy={phase === "connecting"}
+          status={status}
+          error={error}
+        />
+        {notice && (
+          <div className="notice" role="status">
+            <span>{notice}</span>
+            <button type="button" onClick={() => setNotice(null)} aria-label="Cerrar aviso">
+              ×
+            </button>
+          </div>
+        )}
+        {/*
+          Solo con la mano andando. En las otras pantallas los deslizadores
+          salen siempre -allí giran la vista, y con mouse se arrastran-, pero
+          aquí todavía no hay escena que girar: lo único que hacen es dejar
+          probar la mano antes de entrar. Sin mano no tienen nada que hacer, y
+          encima le quitarían sitio al formulario.
+        */}
+        {handTracking && (
+          <>
+            <CameraControls
+              input={inputRef.current}
+              handTracking={handTracking}
+              showLandmarks={showLandmarks}
+              onToggleLandmarks={setShowLandmarks}
+              landmarksExpanded={landmarksExpanded}
+              onToggleExpanded={setLandmarksExpanded}
+            />
+            {showLandmarks && (
+              <LandmarkOverlay input={inputRef.current} expanded={landmarksExpanded} />
+            )}
+          </>
+        )}
+      </div>
     );
   }
 
@@ -415,9 +489,6 @@ export default function App() {
         <CameraControls
           input={inputRef.current}
           handTracking={handTracking}
-          // Se apunta con el dedo índice, así que el puntito de los controles
-          // tiene que señalar lo mismo que el rayo de la escena.
-          pointWithIndex
           showLandmarks={showLandmarks}
           onToggleLandmarks={setShowLandmarks}
           landmarksExpanded={landmarksExpanded}
@@ -437,6 +508,13 @@ export default function App() {
           void enterRoom({ pin: enteredPin, alias, hostToken, startInputAs: wanted })
         }
         onLobby={(who, wanted) => void enterLobby(who, wanted)}
+        onMode={(wanted) => {
+          setMode(wanted);
+          void startInput(wanted).then((aviso) => {
+            if (aviso) setNotice(aviso);
+          });
+        }}
+        mode={mode}
         busy
         status={status}
         error={error}
@@ -509,11 +587,6 @@ export default function App() {
       <CameraControls
         input={inputRef.current}
         handTracking={handTracking}
-        // También aquí: el salón apunta con el dedo índice, igual que el
-        // lobby. Sin esto el punto de los deslizadores seguiría a la palma
-        // mientras el rayo de la escena sigue a la punta del dedo, y se
-        // apuntaría a un sitio moviendo otro.
-        pointWithIndex
         showLandmarks={showLandmarks}
         onToggleLandmarks={setShowLandmarks}
         landmarksExpanded={landmarksExpanded}

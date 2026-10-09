@@ -17,9 +17,16 @@ import { HAND_CONNECTIONS, type HandFrame } from "../input/types";
 const COMPACTO = { w: 200, h: 150 };
 const AMPLIADO = { w: 480, h: 360 };
 
+/**
+ * Los mismos dos neones que la mano en 3D y los rieles, uno por lado.
+ *
+ * Aquí el color no dice el gesto sino la mano, porque es justo lo que se viene
+ * a comprobar: que izquierda y derecha son las que uno cree. La mano derecha
+ * va en el color de "estás tomando esto" por ser la que manda el puntero.
+ */
 const COLOR = {
-  left: "#12938A",
-  right: "#B4531A",
+  left: "#00D9FF",
+  right: "#FF2BD6",
 } as const;
 
 export function LandmarkOverlay({
@@ -51,9 +58,34 @@ export function LandmarkOverlay({
     const px = (x: number) => (1 - x) * ancho;
     const py = (y: number) => y * alto;
 
+    /**
+     * Lo último que se dibujó, para no repintar lo mismo.
+     *
+     * El detector va entre 5 y 24 veces por segundo; la pantalla, a 60. Sin
+     * esto, este recuadro redibujaba el vídeo y los 21 puntos **sesenta veces
+     * por segundo** aunque no hubiera un punto nuevo que enseñar, y lo hacía
+     * en el hilo principal: el mismo del que depende que la mano se sienta
+     * rápida. Era trabajo puro de depuración compitiendo con lo que depura.
+     *
+     * Se dibuja cuando hay datos nuevos, y un respaldo cada 250 ms por si el
+     * vídeo cambia sin que cambien los puntos.
+     */
+    let dibujado = -1;
+    let dibujadoAt = 0;
+    const REPASO_MS = 250;
+
     const pump = () => {
       handle = requestAnimationFrame(pump);
       const frame = input.peek();
+
+      // `sampledAt` cambia solo cuando el detector entrega una medición nueva,
+      // que es lo único que puede cambiar lo que se ve aquí. El repaso cada
+      // 250 ms es para el vídeo de fondo, que sí sigue moviéndose aunque no
+      // haya manos, y para que el recuadro no se quede congelado al perderlas.
+      const ahora = performance.now();
+      if (frame.sampledAt === dibujado && ahora - dibujadoAt < REPASO_MS) return;
+      dibujado = frame.sampledAt;
+      dibujadoAt = ahora;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, ancho, alto);
@@ -76,9 +108,43 @@ export function LandmarkOverlay({
         ctx.fillRect(0, 0, ancho, alto);
       }
 
+      // Cómo va el detector, arriba y siempre, con manos o sin ellas.
+      //
+      // Está aquí porque el equilibrio entre fluidez y consumo no se puede
+      // ajustar a ciegas. Los cuatro números dicen cosas distintas y hay que
+      // leerlos juntos:
+      //
+      //   - **Hz** es la cadencia a la que se infiere. Si está en 10, el
+      //     regulador tocó el piso: este equipo no da para más.
+      //   - **ms de costo** es lo que tarda una inferencia. Es la causa; la
+      //     cadencia es la consecuencia (ver `CADENCE` en cameraSource.ts).
+      //   - **ms de retraso** es lo que pasa desde que la cámara captura el
+      //     cuadro hasta que su resultado está dibujable. Es lo que el
+      //     adelanto del puntero cancela, y por tanto el número a mirar si la
+      //     mano se siente atrasada.
+      //   - **manos** baja a 1 cuando ni el piso de cadencia alcanzó.
+      //
+      // Un `~` delante del retraso avisa de que el navegador no da la marca de
+      // captura y se está estimando: ahí el número es un suelo, no la medida.
+      const d = input.diagnostics;
+      if (d) {
+        ctx.fillStyle = "rgba(6, 14, 18, 0.72)";
+        ctx.fillRect(0, 0, ancho, 18);
+        ctx.fillStyle = "#7FE9FF";
+        ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.textAlign = "left";
+        const tilde = d.timedByCamera ? "" : "~";
+        ctx.fillText(
+          `${d.detectFps}/${d.cadenceHz} Hz · ${d.costMs} ms · ${tilde}${d.latencyMs} ms · ` +
+            `${d.delegate ?? "?"} · ${d.numHands} ${d.numHands === 1 ? "mano" : "manos"}`,
+          6,
+          13,
+        );
+      }
+
       const manos = [frame.left, frame.right].filter(Boolean) as HandFrame[];
       if (manos.length === 0) {
-        ctx.fillStyle = "#9FB2B0";
+        ctx.fillStyle = "#5C7E88";
         ctx.font = "500 13px system-ui, 'Segoe UI', Roboto, sans-serif";
         ctx.textAlign = "center";
         ctx.fillText("Sin manos a la vista", ancho / 2, alto / 2);
@@ -90,16 +156,22 @@ export function LandmarkOverlay({
         if (!puntos || puntos.length < 63) continue;
         const color = COLOR[mano.handedness];
 
+        // El resplandor por `shadowBlur` y no por varias pasadas: es un
+        // recuadro de 200x150, así que cuesta nada, y es lo que hace que el
+        // esqueleto se lea encima del vídeo sin tener que oscurecerlo más.
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 6;
         ctx.beginPath();
         for (const [a, b] of HAND_CONNECTIONS) {
           ctx.moveTo(px(puntos[a * 3]!), py(puntos[a * 3 + 1]!));
           ctx.lineTo(px(puntos[b * 3]!), py(puntos[b * 3 + 1]!));
         }
         ctx.stroke();
+        ctx.shadowBlur = 0;
 
-        ctx.fillStyle = "#F2F6F6";
+        ctx.fillStyle = "#F2FBFF";
         for (let i = 0; i < 21; i++) {
           ctx.beginPath();
           // La muñeca y las puntas de los dedos, más grandes: son las que se

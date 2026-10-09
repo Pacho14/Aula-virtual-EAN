@@ -71,12 +71,17 @@ function lowpass(value: number, previous: number, a: number) {
  * Tres filtros que comparten parametros, para un punto 2D mas la escala.
  *
  * Los cortes son altos a proposito. Con un minCutoff de 1 Hz -lo que habia
- * antes- y la deteccion a ~12 Hz, `alpha` sale 0,35: cada medicion nueva solo
- * mueve el cursor un tercio de lo que deberia, y hacen falta tres deteciones
- * -un cuarto de segundo- para alcanzar la mano. Eso se siente exactamente
- * como que la mano no va en tiempo real. A 3 Hz, `alpha` sube a ~0,65 y el
+ * antes- y la deteccion en la banda en la que corre de verdad (10 a 24 Hz, ver
+ * `CADENCE` en cadence.ts), `alpha` sale entre 0,3 y 0,5: cada medicion nueva
+ * mueve el cursor menos de la mitad de lo que deberia, y hacen falta tres
+ * detecciones para alcanzar la mano. Eso se siente exactamente como que la
+ * mano no va en tiempo real. A 3 Hz, `alpha` sube por encima de 0,65 y el
  * retraso baja a una deteccion. El `beta` alto es lo que ademas suelta el
  * filtro cuando la mano se mueve rapido, que es cuando el retraso se nota.
+ *
+ * Que `alpha` dependa de la cadencia no es un problema aqui: el filtro mira el
+ * `dt` real de cada muestra, asi que se adapta solo cuando el regulador mueve
+ * la cadencia. Es justo lo contrario de un umbral contado en cuadros.
  *
  * Esto no afecta los gestos: `classify()` corre sobre los puntos en crudo
  * dentro del worker, no sobre lo que sale de aqui.

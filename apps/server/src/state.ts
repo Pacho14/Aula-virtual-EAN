@@ -124,7 +124,12 @@ export const AulaState = schema(
     envY: t.quantized(ENV_POS).default(0),
     envZ: t.quantized(ENV_POS).default(0),
     envRot: t.quantized(ENV_ROT).default(0),
-    envScale: t.quantized(ENV_SCALE).default(1),
+    // El escenario arranca al doble (era 1). Con el suelo ahora el doble de
+    // ancho, una esfera a escala 1 dejaba el paisaje demasiado cerca: se le
+    // veia la costura de los pixeles y el horizonte quedaba por dentro del
+    // borde del suelo. Los ejes se quedan en 0, que es lo que mantiene el
+    // horizonte a la altura del piso -escalar desde el origen no lo mueve.
+    envScale: t.quantized(ENV_SCALE).default(2),
 
     environment: t.string().default("white-room"),
     sceneVersion: t.uint16().default(5),

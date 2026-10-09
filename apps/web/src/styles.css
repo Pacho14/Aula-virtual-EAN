@@ -58,6 +58,46 @@ input:focus-visible {
     var(--paper);
 }
 
+/*
+ * Sitio para los deslizadores en la pantalla de entrada.
+ *
+ * Es la única pantalla con un formulario debajo, y los deslizadores flotan
+ * fijos sobre todo lo demás con `pointer-events: auto`: sin apartar la tarjeta
+ * el riel horizontal cae sobre el botón de entrar y el vertical sobre el borde
+ * izquierdo de los campos en un teléfono, donde la tarjeta ocupa el ancho
+ * completo. Un control que tapa el botón al que lleva es peor que no estar.
+ *
+ * Aquí los deslizadores no giran nada -no hay escena todavía-: están para
+ * probar la mano antes de entrar, que es justo para lo que sirve esta
+ * pantalla.
+ */
+/*
+ * Una **banda reservada** abajo, no un relleno.
+ *
+ * El relleno fue el primer intento y no sirve: la tarjeta de esta pantalla es
+ * más alta que la ventana -la pestaña del profesor tiene seis campos-, así que
+ * apartarla por dentro no la aparta de nada y los rieles le caen encima
+ * igualmente. Lo comprobamos midiendo los rectángulos en un Chrome de verdad,
+ * a 1280x800 y a 412x870: el riel horizontal seguía cayendo sobre el botón de
+ * entrar en las dos.
+ *
+ * Lo que sí funciona es quitarle esa franja al área del formulario y darle
+ * desplazamiento propio. Así los rieles tienen su sitio y el formulario el
+ * suyo, y ninguno depende de lo alto que sea el otro.
+ */
+.stage.con-rieles .join {
+  height: calc(100% - 160px);
+  min-height: 0;
+  overflow-y: auto;
+  /* `safe` evita que una tarjeta más alta que el hueco se recorte por arriba:
+     sin él, centrar lo que no cabe esconde el borde superior y no hay forma de
+     volver a subir. */
+  align-content: safe center;
+  /* Sitio para el riel vertical, que vive en el borde izquierdo. En un
+     teléfono la tarjeta ocupa el ancho completo y se le encimaba. */
+  padding-left: 84px;
+}
+
 .join-card {
   width: 100%;
   max-width: 440px;
@@ -796,6 +836,28 @@ input:focus-visible {
   border-radius: 999px;
   cursor: pointer;
   touch-action: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+/*
+  El riel que la mano tiene enganchado.
+  Esto sí se queda, aunque el resto del aspecto haya vuelto al de antes: no es
+  decoración. Enganchado, el riel sigue la mano **aunque la mano ya no lo esté
+  apuntando**, así que tiene que verse que está tomado o el siguiente
+  movimiento se siente como un fallo. Lo pone y lo quita el bucle de la mano en
+  CameraControls, sobre el riel concreto y no sobre los dos.
+*/
+.camctl-track[data-enganchado="si"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 207, 192, 0.22);
+}
+
+/* Apuntado, antes de engancharse: se insinúa sin prometer nada. */
+.camctl-track[data-apuntado="si"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 207, 192, 0.18);
 }
 
 .camctl-track:focus-visible {
@@ -811,6 +873,38 @@ input:focus-visible {
 .camctl-slider.v .camctl-track {
   width: 16px;
   height: 100%;
+}
+
+/*
+ * El contador sobre el riel: se llena mientras apuntas.
+ *
+ * Es la misma señal que la barra que recorre los botones del salón, y está
+ * aquí por el mismo motivo: el arco alrededor del puntito mide dieciocho
+ * píxeles y vive en una esquina, así que dice *cuánto falta* pero no se ve.
+ * Llenar el control al que apuntas sí se ve, y además dice *cuál*.
+ *
+ * Se escala en vez de cambiar el ancho: una transformación no rehace la
+ * maquetación, y esto corre en cada cuadro.
+ */
+.camctl-dwell {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  /*
+    Opaco de verdad. Estuvo al 30 % y sobre un riel casi negro eso es un
+    cambio de tono que no se ve: el contador estaba ahí, corría, y no se
+    notaba. Un indicador que hay que buscar no es un indicador.
+  */
+  opacity: 0.85;
+  pointer-events: none;
+  transform-origin: left center;
+  transform: scaleX(var(--avance, 0));
+}
+
+.camctl-slider.v .camctl-dwell {
+  transform-origin: center bottom;
+  transform: scaleY(var(--avance, 0));
 }
 
 /* La marca del centro: el 0°, para saber dónde está el frente sin soltar. */
@@ -843,6 +937,15 @@ input:focus-visible {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
+/* Enganchado, el mando crece un poco: la misma señal que el mando 3D. */
+.camctl-track[data-enganchado="si"] .camctl-knob {
+  width: 30px;
+  height: 30px;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    0 0 0 4px rgba(79, 207, 192, 0.2);
+}
+
 .camctl-slider.h .camctl-knob {
   top: 50%;
   transform: translate(-50%, -50%);
@@ -853,7 +956,17 @@ input:focus-visible {
   transform: translate(-50%, 50%);
 }
 
-/* El punto que sigue a la mano sobre la interfaz de pantalla. */
+/*
+ * El punto que sigue a la mano sobre la interfaz de pantalla.
+ *
+ * Es el gemelo plano del cursor de la escena 3D, y por eso tiene sus mismas
+ * tres piezas: núcleo, cerco y arco. Apuntar y esperar se tiene que ver igual
+ * en los dos sitios o son dos interfaces distintas.
+ *
+ * Mientras apunta va en cian; enganchado a un riel pasa a magenta y se queda
+ * sobre el mando -no sobre la mano-, porque a partir de ese momento lo que
+ * importa es dónde está el control, no dónde está el dedo.
+ */
 .camctl-hand {
   position: absolute;
   top: 0;
@@ -865,10 +978,12 @@ input:focus-visible {
   background: rgba(18, 147, 138, 0.55);
   opacity: 0;
   pointer-events: none;
-  transition: background 120ms ease;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
 }
 
-.camctl-hand[data-pinch="si"] {
+.camctl-hand[data-estado="enganchado"] {
   background: var(--accent);
   box-shadow: 0 0 0 5px rgba(18, 147, 138, 0.25);
 }
@@ -876,19 +991,29 @@ input:focus-visible {
 /*
  * El contador de la espera sostenida sobre un riel.
  *
- * Es el mismo lenguaje que el anillo de la escena 3D -un arco que se llena-,
- * para que apuntar y esperar se vea igual en los dos sitios. El arco lo marca
- * `--dwell` en grados, que escribe CameraControls en cada cuadro; a 0deg el
- * conic-gradient no pinta nada, asi que en reposo desaparece solo.
+ * Mismo lenguaje que el arco de la escena 3D, incluido el ir a tramos y no
+ * continuo: un arco liso al 20 % es un detalle que se pierde, y tres tramos
+ * encendidos de doce se cuentan de un vistazo. Los tramos los hace el
+ * `repeating-conic-gradient` de la máscara, que abre un hueco cada 30°.
+ *
+ * El arco lo marca `--dwell` en grados, que escribe CameraControls en cada
+ * cuadro; a 0deg el conic-gradient no pinta nada, así que en reposo
+ * desaparece solo.
  */
 .camctl-hand::after {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -7px;
   border-radius: 50%;
   background: conic-gradient(var(--accent) var(--dwell, 0deg), transparent 0);
-  -webkit-mask: radial-gradient(circle, transparent 0 11px, #000 11px);
-  mask: radial-gradient(circle, transparent 0 11px, #000 11px);
+  -webkit-mask:
+    radial-gradient(circle, transparent 0 11px, #000 11px),
+    repeating-conic-gradient(#000 0 24deg, transparent 24deg 30deg);
+  mask:
+    radial-gradient(circle, transparent 0 11px, #000 11px),
+    repeating-conic-gradient(#000 0 24deg, transparent 24deg 30deg);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
   pointer-events: none;
 }
 

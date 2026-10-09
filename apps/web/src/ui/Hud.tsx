@@ -101,9 +101,11 @@ export function Hud({
         {editing ? (
           snapshot.source === "camera" ? (
             <>
-              <b>Apunta</b> a un botón y <b>deja la mano quieta</b> —o pellizca— para
-              pulsarlo · la pieza que sacas <b>ya viene en la mano</b>: llévala a la mesa
-              y <b>pellizca</b> para soltarla · la mesa la atrae sola
+              <b>Apunta y espera</b> a que se llene el anillo —o <b>cierra la mano</b>,
+              que es lo mismo pero ya · los deslizadores se quedan <b>enganchados</b>{" "}
+              hasta que cierres la mano otra vez · la pieza que sacas{" "}
+              <b>ya viene en la mano</b>: llévala a la mesa y <b>abre la mano</b> para
+              soltarla
             </>
           ) : (
             <>
@@ -114,9 +116,10 @@ export function Hud({
           )
         ) : snapshot.source === "camera" ? (
           <>
-            <b>Apunta con el dedo y espera</b> a que se llene el anillo para tomar la
-            pieza · <b>pellizco</b> la suelta · <b>mano arriba 1 s</b> pide la palabra ·
-            arrastra para mirar alrededor
+            <b>Apunta y espera</b> a que se llene el anillo —o <b>cierra la mano</b>,
+            que es lo mismo pero ya · <b>abre la mano</b> para soltar la pieza · los
+            deslizadores se quedan <b>enganchados</b> hasta que cierres la mano otra
+            vez · <b>mano arriba 1 s</b> pide la palabra
           </>
         ) : (
           <>

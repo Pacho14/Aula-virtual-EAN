@@ -95,7 +95,17 @@ export class MouseSource implements InputSource {
       landmarks: null,
       worldLandmarks: null,
     };
-    this.frame = { source: "mouse", left: null, right: hand, primary: hand, detectFps: 0 };
+    // `sampledAt` lleva el reloj de ahora y no un cero fijo: con el mouse cada
+    // lectura es nueva de verdad, asi que quien se salte los cuadros repetidos
+    // -la vista de depuracion- no debe creer que esto nunca cambia.
+    this.frame = {
+      source: "mouse",
+      left: null,
+      right: hand,
+      primary: hand,
+      detectFps: 0,
+      sampledAt: performance.now(),
+    };
   }
 }
 

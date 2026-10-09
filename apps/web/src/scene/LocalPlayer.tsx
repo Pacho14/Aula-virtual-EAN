@@ -1,9 +1,8 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
-import { Plane, Vector2, Vector3, type Camera } from "three";
-import { INDEX_TIP, jointInViewSpace, viewDepth, type Vec3 } from "../input/handSpace";
+import { Plane, Vector2, Vector3 } from "three";
 import type { InputLayer } from "../input/inputLayer";
-import { GESTURE_INDEX, type HandFrame } from "../input/types";
+import { GESTURE_INDEX, HOLD_GESTURES, type HandFrame } from "../input/types";
 import { aimAt, type Scene } from "../net/api";
 import type { AulaRoom } from "../net/room";
 import type { Voice } from "../net/voice";
@@ -11,7 +10,7 @@ import { cursorState, handRay, HandCursor } from "../ui3d/HandCursor";
 import { DWELL_MS, WidgetPointer } from "../ui3d/pointer";
 import { exposeWidgetProbe, pointer } from "../ui3d/widgets";
 import { cameraRig, nudgeRig, restRig } from "./cameraRig";
-import { HandSkeleton, type HandSkeletonHandle } from "./HandSkeleton";
+import { OwnHands, type OwnHandsHandle } from "./OwnHands";
 import { snapToPlacement } from "./placement";
 import { AUTO_GRAB_WINDOW_MS, autoGrab, grabbables, grabbablesList, predicted } from "./registry";
 
@@ -28,12 +27,28 @@ export interface HudSnapshot {
 /** El cliente envia pose 20 veces por segundo, como fija la seccion 05. */
 const POSE_INTERVAL_MS = 50;
 
+/**
+ * Cuanto tiene que llevar una pieza en la mano antes de poder soltarla.
+ *
+ * Es la unica excepcion a "abrir la mano suelta", y existe porque **tomar y
+ * soltar pueden caer en el mismo gesto**:
+ *
+ * - Con mouse, un click es apretar y soltar casi a la vez. La pieza sale del
+ *   panel al apretar y el soltar inmediato la dejaria caer ahi mismo.
+ * - Con la mano, el detector puede perder el pellizco un cuadro justo despues
+ *   de tomar algo, y la pieza se caeria sola.
+ *
+ * Los dos casos son el mismo: un soltar que no es una decision, sino el final
+ * del gesto con el que se tomo. 300 ms no le quitan nada a quien si quiere
+ * soltar -nadie toma y deja algo mas rapido que eso- y hacen que con mouse la
+ * cosa funcione sola como click para tomar y click para soltar, sin una sola
+ * linea que pregunte de que dispositivo venimos.
+ */
+const SETTLE_MS = 300;
+
 const UP = new Vector3(0, 1, 0);
 
 const ndc = new Vector2();
-/** Cuanto separa la punta del indice de la muñeca. Ver `projectHand`. */
-const tipOffset: Vec3 = [0, 0, 0];
-const tipWorld = new Vector3();
 const targetPos = new Vector3();
 const forward = new Vector3();
 const surface = new Plane();
@@ -72,23 +87,15 @@ export function LocalPlayer({
   const pending = useRef<(Held & { at: number }) | null>(null);
   const timers = useRef({ pose: 0, hud: 0, frames: 0, fpsAt: 0, renderFps: 0 });
   const widgetPointer = useRef(new WidgetPointer());
-  /** Un pellizco vale por un cuadro: es un flanco, no un estado. */
-  const selectPulse = useRef(false);
-  /**
-   * Si abrir la mano ya puede soltar la pieza que se tiene.
-   *
-   * Lo arma cerrar el puno, y nada mas. Una pieza recien sacada del panel
-   * llega a una mano que sigue abierta: si abrir bastara, se caeria en el
-   * sitio en el mismo instante de aparecer. Para esa pieza queda el pellizco,
-   * que es un gesto deliberado, o cerrar la mano y volver a abrirla.
-   */
-  const armed = useRef(false);
+  /** Cuando empezo el agarre que esta en curso. Ver `SETTLE_MS`. */
+  const grabbedAt = useRef(0);
+  /** Que pieza se esta esperando y desde cuando. El contador. */
+  const objectDwell = useRef<{ id: string | null; since: number }>({ id: null, since: 0 });
+  /** La mano venia cerrada del cuadro anterior, para tomar en el flanco. */
+  const cerradaAntes = useRef(false);
   /** A que distancia corto el rayo la pieza: donde va el contador. */
   const hitDistance = useRef(2.6);
-  /** Que pieza se esta esperando y desde cuando. */
-  const objectDwell = useRef<{ id: string | null; since: number }>({ id: null, since: 0 });
-  const leftHandRef = useRef<HandSkeletonHandle>(null);
-  const rightHandRef = useRef<HandSkeletonHandle>(null);
+  const handsRef = useRef<OwnHandsHandle>(null);
   /**
    * Donde esta cada mano en la escena. Sirve para dos cosas: dibujar la
    * propia mano, y viajar en la pose -de aqui salen las manos del avatar que
@@ -154,14 +161,11 @@ export function LocalPlayer({
   /**
    * Devuelve si de verdad empezo el agarre.
    *
-   * `conElPuno` distingue las dos formas de acabar con una pieza en la mano, y
-   * de ahi sale si abrirla ya la suelta. Quien cierra el puno sobre una pieza
-   * la suelta al abrirlo, como siempre. Quien la saca del panel no ha cerrado
-   * nada: su mano ya estaba abierta -o pellizcando el boton- y soltarla ahi
-   * dejaria la pieza en el aire en el instante de aparecer.
+   * No hace falta decirle como se tomo: se suelta siempre igual, abriendo la
+   * mano.
    */
   const startGrab = useCallback(
-    (id: string, conElPuno: boolean) => {
+    (id: string) => {
       if (held.current || pending.current) return false;
       const object = room.state.objects.get(id);
       if (!object || object.heldBy !== "") return false;
@@ -170,7 +174,7 @@ export function LocalPlayer({
         half: [object.sx / 2, object.sy / 2, object.sz / 2],
         at: performance.now(),
       };
-      armed.current = conElPuno;
+      grabbedAt.current = performance.now();
       room.send("grab", { id });
       return true;
     },
@@ -188,23 +192,11 @@ export function LocalPlayer({
 
   useEffect(() => {
     return input.on((action) => {
-      // Sobre un control de la interfaz, el pellizco lo pulsa; con una pieza
-      // en la mano, la suelta. El puntero decide cual de las dos cosas es.
-      if (action === "select") {
-        if (held.current || pending.current) drop();
-        else selectPulse.current = true;
-      }
-
-      if (action === "grab") {
-        // Cerrar el puno sobre un boton no puede, ademas, llevarse una pieza.
-        if (pointer.hoveredId) return;
-        const id = hoveredRef.current;
-        if (id) startGrab(id, true);
-      }
-
-      // Abrir la mano suelta lo que se cerro el puno para tomar. Lo que vino
-      // del panel no: ver `armed`.
-      if (action === "release" && armed.current) drop();
+      // **Abrir la mano suelta.** Es lo unico que llega como accion: tomar lo
+      // resuelve cada control a su manera, porque no todos se toman igual.
+      //
+      // La excepcion es una pieza recien tomada: ver `SETTLE_MS`.
+      if (action === "release" && performance.now() - grabbedAt.current >= SETTLE_MS) drop();
 
       if (action === "raiseHand") room.send("raiseHand", { v: true });
       if (action === "lowerHand") room.send("raiseHand", { v: false });
@@ -232,45 +224,66 @@ export function LocalPlayer({
     );
     camera.updateMatrixWorld();
 
-    // Posicion mundial de cada mano sobre su propio rayo.
+    // Las propias manos, con el mismo modulo que usa el lobby.
+    //
+    // **Se dibujan siempre que haya camara**, tambien mientras el profesor
+    // arma el salon. Antes ahi se escondian, con el argumento de que la
+    // pantalla es casi toda paneles y la mano los tapa; el argumento era malo,
+    // porque es justo la pantalla donde mas se usan -se pulsa, se arrastra y
+    // se sacan piezas- y esconder la mano deja sin saber si el detector la ve.
+    // Si tapan algo, lo que hay que mover son los paneles.
+    const carryingNow = Boolean(held.current || pending.current);
+    const showHands = frame.source === "camera";
     handWorld.current.leftTracked = Boolean(frame.left);
     handWorld.current.rightTracked = Boolean(frame.right);
-    if (frame.left) projectHand(frame.left, camera, handWorld.current.left);
-    if (frame.right) projectHand(frame.right, camera, handWorld.current.right);
+    const placed = handsRef.current?.update(frame.left, frame.right, camera, {
+      carrying: carryingNow,
+      draw: showHands,
+    });
+    if (placed) {
+      handWorld.current.left.copy(placed.left);
+      handWorld.current.right.copy(placed.right);
+    }
 
     // Rayo del puntero. La interfaz va primero: un panel esta delante de la
     // escena y tiene que ganarle al objeto que quede detras.
     let hovered: string | null = null;
     let onWidget = false;
-    /** Avance del contador de la espera sostenida, de 0 a 1. */
+    /** Avance del contador sobre una pieza, de 0 a 1. */
     let dwell = 0;
     if (primary) {
-      // La punta del indice, exactamente igual que en el lobby (ver
-      // LobbyPointer). Señalar con el dedo es el gesto que la gente hace
-      // sola, y el lobby lleva tiempo demostrando que asi se apunta bien.
-      //
-      // La razon por la que aqui se usaba la palma -que la punta se desploma
-      // al cerrar la mano y la pieza saltaria al agarrarla- es real, pero se
-      // paga en todo lo demas: se apunta peor todo el rato para que un
-      // instante concreto salga limpio. Si el salto al agarrar molesta, se
-      // arregla ahi y no cambiando como se apunta.
-      ndc.set(primary.indexNdcX, primary.indexNdcY);
-      handRay.setFromCamera(ndc, camera);
-
       const gesture = primary.gesture;
       const carrying = Boolean(held.current || pending.current);
+
+      // **De donde sale el rayo depende de si se lleva algo.**
+      //
+      // Con la mano libre, de la punta del indice: señalar con el dedo es el
+      // gesto que la gente hace sola, y es con lo que se apunta en el lobby,
+      // en los paneles y en los rieles.
+      //
+      // Con una pieza en la mano, del centro de la palma. La punta del indice
+      // **se desploma hacia la palma al abrir y cerrar la mano**, asi que con
+      // ella mandando, el gesto de soltar mueve la pieza en el mismo instante
+      // de soltarla: se suelta y aterriza en otro sitio del que se apuntaba.
+      // La palma no se desplaza con los dedos, asi que abrir la mano suelta la
+      // pieza donde estaba y nada mas.
+      //
+      // El cambio no se nota porque pasa cuando la pieza ya esta tomada: en
+      // ese momento lo que se sigue con la vista es la pieza, no el cursor.
+      if (carrying) ndc.set(primary.ndcX, primary.ndcY);
+      else ndc.set(primary.indexNdcX, primary.indexNdcY);
+      handRay.setFromCamera(ndc, camera);
+
+      // Cerrar la mano, y si acaba de cerrarse. Lo segundo solo lo usa el
+      // mouse para tomar una pieza en el click; con camara manda el contador.
+      const cerrandoAhora = HOLD_GESTURES.has(gesture);
 
       // Arrastrando un deslizador de la pantalla, la escena no escucha: el
       // mismo pellizco no puede mover la camara y pulsar un boton a la vez.
       if (cameraRig.handBusy) {
+        cerradaAntes.current = cerrandoAhora;
         widgetPointer.current.reset();
-        selectPulse.current = false;
         hoveredRef.current = null;
-        // Esto sale de la funcion antes de llegar al bloque del contador, asi
-        // que hay que apagarlo aqui o se queda pintado a medio llenar
-        // mientras se mueve la camara.
-        objectDwell.current.id = null;
-        cursorState.dwell = 0;
         cursorState.visible = false;
         return;
       }
@@ -278,17 +291,14 @@ export function LocalPlayer({
       // Con una pieza en la mano la interfaz no escucha: cruzar por delante
       // de un panel camino de la mesa no puede pulsar nada.
       if (carrying) {
+        // Con una pieza en la mano la interfaz no escucha. Soltarla no se
+        // decide aqui: lo hace la accion `release` en cuanto la mano se abre.
         widgetPointer.current.reset();
-        // Cerrar el puno sobre una pieza que vino del panel arma el soltado:
-        // de ahi en adelante se suelta como cualquier otra.
-        if (gesture === "fist") armed.current = true;
-        else if (gesture === "open" && armed.current) drop();
       } else {
         onWidget = widgetPointer.current.update(
           handRay,
           now,
-          gesture === "fist" || gesture === "pinch",
-          selectPulse.current,
+          cerrandoAhora,
           frame.source === "camera",
         );
       }
@@ -304,58 +314,56 @@ export function LocalPlayer({
         }
       }
 
-      // Espera sostenida sobre una pieza: apuntarla y quedarse quieto la
-      // toma, sin ningun gesto. Los botones ya se pulsaban asi; las piezas
-      // solo se podian agarrar cerrando el puño, y un gesto es justo lo que
-      // peor se lee cuando el detector va a cinco cuadros por segundo.
+      // **El contador.** Apuntas a una pieza, sostienes la mano, el anillo se
+      // llena y la pieza es tuya. Se suelta abriendo la mano.
       //
-      // Solo con camara: con mouse hay click, y ahi quedarse quieto encima de
-      // una pieza no puede llevarsela.
-      const puedeEsperar =
-        frame.source === "camera" && Boolean(hovered) && !held.current && !pending.current;
-      if (puedeEsperar) {
+      // Es la unica cosa que se toma asi, y por eso: una pieza esta lejos, se
+      // apunta, y lo que conviene ahi es que **no haga falta que se lea ningun
+      // gesto** mientras se apunta -que es justo lo que peor funciona cuando
+      // el detector va a cinco cuadros por segundo. Un boton es lo contrario:
+      // es una orden de una sola vez, cerrar la mano es instantaneo, y un
+      // codigo de seis digitos a 850 ms por tecla serian cinco segundos.
+      //
+      // Con mouse no hay contador: el click ya es deliberado y esperar encima
+      // de una pieza con el cursor seria una espera sin motivo.
+      const libre = Boolean(hovered) && !held.current && !pending.current && !onWidget;
+      if (libre && frame.source === "camera") {
         if (objectDwell.current.id !== hovered) {
           objectDwell.current.id = hovered;
           objectDwell.current.since = now;
         }
         dwell = Math.min(1, (now - objectDwell.current.since) / DWELL_MS);
         if (dwell >= 1) {
-          // `false`: no se tomo cerrando el puño, asi que abrir la mano no la
-          // suelta -se caeria en el aire nada mas tomarla, porque la mano que
-          // apunta ya esta abierta. Se suelta pellizcando, o cerrando el puño
-          // y abriendolo, igual que una pieza sacada del panel.
-          startGrab(hovered!, false);
+          startGrab(hovered!);
           objectDwell.current.id = null;
           dwell = 0;
         }
       } else {
         objectDwell.current.id = null;
+        if (libre && cerrandoAhora && !cerradaAntes.current) startGrab(hovered!);
       }
+      cerradaAntes.current = cerrandoAhora;
+
     } else {
       widgetPointer.current.reset();
       objectDwell.current.id = null;
+      cerradaAntes.current = false;
     }
-    selectPulse.current = false;
     hoveredRef.current = hovered;
 
-    // Siempre hay **exactamente un** puntero a la vista, nunca dos y nunca
-    // ninguno:
+    // **La mano y el cursor se ven los dos, siempre.**
     //
-    //   - Con la mano dibujada, la mano ES el puntero. El cursor solo asoma
-    //     mientras corre el contador, porque ahi si hace falta ver donde se
-    //     esta llenando el anillo.
-    //   - Sin la mano dibujada -el profesor armando el salon, o el modo
-    //     mouse-, el cursor se ve siempre. Sin esto no quedaba forma alguna
-    //     de saber a que se apunta, que es justo lo que pasaba al esconder la
-    //     mano en el editor.
-    //
-    // El contador en si va igual en los dos casos: sobre un boton o un
-    // deslizador lo lleva el puntero de la interfaz, sobre una pieza el de
-    // aqui arriba.
-    const showHands = frame.source === "camera" && !editing;
-    if (onWidget) dwell = pointer.dwell;
-    cursorState.dwell = dwell;
-    cursorState.visible = !showHands || dwell > 0.02;
+    // Antes se escondia uno de los dos para que no hubiera "dos punteros", y
+    // la regla sobraba: los dos caen sobre el **mismo rayo** -la mano se ancla
+    // al reves, poniendo primero el punto con el que se apunta- asi que en
+    // pantalla quedan alineados. La mano, a medio metro; el cursor, alla donde
+    // el rayo toca. No compiten: dicen lo mismo a dos distancias, que es
+    // exactamente lo que hace falta para apuntar a algo lejano con una mano
+    // que esta cerca.
+    // El anillo del cursor sirve a los dos contadores: el de las piezas, que
+    // lleva esta funcion, y el de los controles, que lleva `WidgetPointer`.
+    cursorState.dwell = onWidget ? pointer.dwell : dwell;
+    cursorState.visible = true;
     cursorState.big = Boolean(hovered || held.current || onWidget);
     cursorState.distance = onWidget
       ? pointer.distance
@@ -368,17 +376,10 @@ export function LocalPlayer({
     // cuadros porque el aviso del servidor puede adelantarse al estado que
     // trae la pieza.
     if (autoGrab.id) {
-      if (startGrab(autoGrab.id, false) || now - autoGrab.since > AUTO_GRAB_WINDOW_MS) {
+      if (startGrab(autoGrab.id) || now - autoGrab.since > AUTO_GRAB_WINDOW_MS) {
         autoGrab.id = null;
       }
     }
-
-    // La propia mano. Con mouse no hay ninguna que dibujar, y mientras el
-    // profesor arma el salon tampoco: ahi la pantalla es casi toda paneles y
-    // la mano los tapa, asi que manda el cursor -ver arriba- y la mano vuelve
-    // al empezar la clase.
-    updateOwnHand(leftHandRef.current, showHands ? frame.left : null, handWorld.current.left, camera);
-    updateOwnHand(rightHandRef.current, showHands ? frame.right : null, handWorld.current.right, camera);
 
     // Confirmacion del agarre: el servidor es quien lo concede.
     if (pending.current) {
@@ -499,65 +500,10 @@ export function LocalPlayer({
   // contador corre, y se posa sobre lo que se este esperando.
   return (
     <group>
-      <HandSkeleton ref={leftHandRef} />
-      <HandSkeleton ref={rightHandRef} />
+      <OwnHands ref={handsRef} />
       <HandCursor />
     </group>
   );
-}
-
-/** Color de la mano propia segun el gesto: realimentacion inmediata. */
-const HAND_COLORS: Record<string, string> = {
-  none: "#8FA2A0",
-  point: "#0B6E67",
-  pinch: "#12938A",
-  fist: "#B4531A",
-  open: "#5C7A1E",
-};
-
-function updateOwnHand(
-  skeleton: HandSkeletonHandle | null,
-  hand: HandFrame | null,
-  world: Vector3,
-  camera: Camera,
-) {
-  if (!skeleton) return;
-  const color = hand ? (HAND_COLORS[hand.gesture] ?? HAND_COLORS.none!) : HAND_COLORS.none!;
-  skeleton.update(hand, world, camera, color);
-}
-
-/**
- * Donde va la propia mano dentro de la escena.
- *
- * Sin cursor, la mano es la unica marca de hacia donde se apunta, asi que el
- * rayo tiene que pasar **por la mano dibujada** o se apuntaria a un sitio y
- * se seleccionaria otro. Y tiene que pasar por la punta del indice, que es
- * con lo que la gente señala.
- *
- * Eso no sale solo. El rayo lleva la ganancia de cameraSource.ts -para que un
- * movimiento corto alcance toda la pantalla- mientras que la forma de la mano
- * va en metros reales, sin amplificar. Asi que se coloca al reves de lo
- * normal: primero se calcula donde tiene que caer la punta del indice, y
- * despues se retrocede lo que esa punta se separa de la muñeca, que es por
- * donde se ancla el grupo.
- *
- * De fondo la mano va a la profundidad que diga `viewDepth`. Estirar el brazo
- * hacia la pantalla acerca la mano a la webcam, que es alejarla de los
- * propios ojos, asi que la mano se adentra en la escena hacia la mesa;
- * recogerla la trae hacia la cara, donde se ve grande solo por perspectiva,
- * porque su tamaño en metros no cambia nunca.
- */
-function projectHand(hand: HandFrame, camera: Camera, out: Vector3) {
-  ndc.set(hand.indexNdcX, hand.indexNdcY);
-  handRay.setFromCamera(ndc, camera);
-  out
-    .copy(handRay.ray.origin)
-    .addScaledVector(handRay.ray.direction, viewDepth(hand.cameraDistance));
-
-  if (!hand.worldLandmarks) return;
-  jointInViewSpace(hand.worldLandmarks, INDEX_TIP, tipOffset);
-  tipWorld.set(tipOffset[0], tipOffset[1], tipOffset[2]).applyQuaternion(camera.quaternion);
-  out.sub(tipWorld);
 }
 
 function writeHand(

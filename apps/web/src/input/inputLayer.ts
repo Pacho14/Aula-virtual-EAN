@@ -9,9 +9,16 @@
  *   WebXR       >--- capa de entrada ---> apuntar / seleccionar / agarrar /
  *   Mouse      /                          soltar / levantar la mano
  */
-import { CameraSource, type CameraOptions } from "./cameraSource";
+import { CameraSource, type CameraDiagnostics, type CameraOptions } from "./cameraSource";
 import { MouseSource } from "./mouseSource";
-import { emptyFrame, type InputAction, type InputFrame, type InputSource } from "./types";
+import {
+  emptyFrame,
+  opensHand,
+  type Gesture,
+  type InputAction,
+  type InputFrame,
+  type InputSource,
+} from "./types";
 
 /** Tiempo que hay que sostener la mano arriba para pedir la palabra. */
 const RAISE_HOLD_MS = 1000;
@@ -25,7 +32,7 @@ export class InputLayer {
   private listeners = new Set<Listener>();
   private latest: InputFrame = emptyFrame("mouse");
 
-  private previousGesture: string = "none";
+  private previousGesture: Gesture = "none";
   private raiseSince = 0;
   private handRaised = false;
   /** Si hay una pieza en la mano. Lo escribe la escena en cada cuadro. */
@@ -35,9 +42,34 @@ export class InputLayer {
     return this.source?.kind ?? "mouse";
   }
 
+  /**
+   * Si hay una fuente viva.
+   *
+   * Hace falta aparte de `kind` porque `kind` contesta "mouse" tanto con el
+   * mouse andando como sin fuente ninguna, y las dos cosas no son lo mismo
+   * cuando lo que se pregunta es si ya se arrancó: sin esto, volver a pedir el
+   * mouse tiraría y rearrancaría la fuente, y volver a pedir la cámara
+   * apagaría y volvería a pedir permiso.
+   */
+  get running() {
+    return this.source !== null;
+  }
+
   /** El <video> de la camara activa, o null si la fuente es mouse/toque. */
   get activeVideo(): HTMLVideoElement | null {
     return this.source instanceof CameraSource ? this.source.videoElement : null;
+  }
+
+  /**
+   * Como va el detector: cadencia, costo, retraso real y cuantas manos busca.
+   *
+   * Es null con mouse, donde nada de esto significa algo. Lo pinta la vista de
+   * depuracion, y existe porque el equilibrio entre fluidez y consumo no se
+   * puede ajustar a ciegas: sin ver el costo medido no hay forma de saber si
+   * la cadencia bajo porque el equipo no da o porque el regulador se paso.
+   */
+  get diagnostics(): CameraDiagnostics | null {
+    return this.source instanceof CameraSource ? this.source.diagnostics : null;
   }
 
   /**
@@ -120,11 +152,14 @@ export class InputLayer {
     const gesture = hand?.gesture ?? "none";
 
     if (gesture !== this.previousGesture) {
-      if (gesture === "pinch") this.emit("select");
-      if (gesture === "fist") this.emit("grab");
-      // Soltar es cualquier salida del puno, no solo la mano abierta: si el
-      // detector pierde la mano a media maniobra, el objeto tiene que caer.
-      if (this.previousGesture === "fist") this.emit("release");
+      // Soltar va primero, y mirando el conjunto `HOLDS` en vez de un gesto
+      // suelto. Las dos cosas importan:
+      //
+      //   - Primero, porque si "agarrar" se emitiera antes, pasar de pellizco
+      //     a puño soltaria justo lo que se acaba de tomar.
+      //   - Con `releasesHold` y no a mano, porque pasar de un agarre al otro
+      //     no es soltar: la regla completa, y por que, esta alli.
+      if (opensHand(this.previousGesture, gesture)) this.emit("release");
       this.previousGesture = gesture;
     }
 

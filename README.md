@@ -61,7 +61,7 @@ mitad de clase: se desecha a los 45 minutos vacío, o cuando vence el PIN a las
 | `npm run assets:hdri` | Reduce la carpeta `HDRI/` a entornos servibles |
 | `npm run smoke -w @aula/server` | Dos participantes reales: poses, agarres, autoridad del servidor |
 | `npm run test:acceso -w @aula/server` | Control de acceso de profesor y vida del salón |
-| `npm run test:manos` | La conversión de coordenadas de la mano, sin navegador |
+| `npm run test:manos` | Coordenadas, cadencia y gestos de la mano, sin navegador |
 | `npm run test:navegador` | La aplicación en un Chrome real, con capturas |
 | `npm run tunnel` | Levanta el túnel de Cloudflare (ver más abajo) |
 
@@ -122,8 +122,16 @@ apps/web/       Cliente React + Three.js.
   ui3d/           El editor del profesor: paneles, botones y deslizadores en 3D.
   net/            API, Colyseus y voz con audio espacial.
 
-scripts/hdri.mjs  Reduce las HDRI de 4K a algo que quepa por la red.
+scripts/hdri.mjs            Reduce las HDRI de 4K a algo que quepa por la red.
+scripts/vendor-mediapipe.mjs  Deja el runtime y el modelo en el servidor.
 ```
+
+Dentro de `input/` hay dos módulos **sin una sola dependencia** —ni three, ni
+DOM, ni MediaPipe— y están así a propósito: `handSpace.ts` (la conversión de
+coordenadas y la profundidad) y `cadence.ts` (cada cuánto se infiere, cuánto se
+adelanta, cuándo se da una mano por perdida). Son las dos partes que se rompen
+sin que ninguna otra prueba se entere, y poder correrlas en un segundo sin
+abrir un navegador es lo que evita descubrirlo en un salón de clase.
 
 ### El editor del profesor
 
@@ -143,11 +151,11 @@ menú que sigue la mirada marea. Para que se pueda llegar a ellos sin perder la
 mano de cuadro, es la cámara la que sigue a la mano, y solo cuando la mano se
 acerca al borde.
 
-Un botón pensado para hand tracking no se pulsa como uno de mouse: la mano
-tiembla y el pellizco a veces no se lee. Hay dos caminos para lo mismo —
-pellizcar, o **sostener la mano encima** algo menos de un segundo—, y el anillo
-que se va llenando alrededor del cursor es lo que hace que el segundo se
-entienda sin explicarlo.
+Los botones del editor se pulsan como todo lo demás: cerrando la mano encima.
+Los deslizadores no se pulsan, se **enganchan**: cerrar la mano sobre el riel
+lo prende de tu mano y la sigue hasta que la abras o te salgas de su eje. Un
+botón se pulsa una vez; un deslizador se ajusta, y esa es la única diferencia
+entre los dos.
 
 ### El imán
 
@@ -198,7 +206,7 @@ horizontal y un recorrido más corto en vertical.
 Y quien la mueve es el deslizador, nunca la mano directamente:
 
 ```
-MediaPipe → puntos de la mano → pellizco → deslizador → giro de la cámara
+punta del índice → engancharse → centro de la palma → giro de la cámara
 ```
 
 Esa cadena importa. Una cámara pegada a la posición de la mano se mueve cada vez
@@ -206,6 +214,19 @@ que la mano tiembla y no hay forma de dejarla quieta; un deslizador se queda
 donde lo sueltas. Los dos deslizadores están en pantalla durante toda la
 experiencia —lobby y clase, estudiante y profesor— y se pueden ocultar sin que
 la cámara deje de funcionar.
+
+Los dos puntos de la mano hacen cosas distintas, a propósito. **Se apunta con
+la punta del índice**, que es con lo que la gente señala; **se arrastra con el
+centro de la palma**, que es el punto más estable de los veintiuno. Una punta
+de dedo se dobla, se desplaza al cerrar la mano y tiene su propio temblor, y
+arrastrar es justo donde eso se nota.
+
+Y el riel **se engancha**: cierras la mano sobre él y de ahí en adelante va
+prendido de tu mano y la sigue. Se suelta al abrirla o al irte de su eje. El arrastre es **relativo** —se recuerda
+dónde estaba el mando y dónde la palma, y el mando se mueve lo que se mueva la
+palma— porque estos rieles son dos barras de dieciséis píxeles en una esquina:
+un mapeo directo metería los 180° de giro en el ancho de la barra y pediría
+quedarse dentro de ella con una mano que tiembla.
 
 El arrastre con mouse sigue existiendo y escribe en el mismo valor: arrastrar
 mueve el deslizador, y mover el deslizador mueve la vista.
@@ -232,26 +253,39 @@ hilo del worker.
 En los dos sitios el puntero sale de la **punta del índice**: señalar con el
 dedo es el gesto que la gente hace sola. Lo que cambia es la marca en pantalla.
 
-La regla es que **siempre hay exactamente un puntero a la vista, nunca dos y
-nunca ninguno**:
+**Las manos se dibujan desde el lobby**, no desde que empieza la clase. Entrar
+y ver tus manos es lo primero que dice que la experiencia va de manos; antes
+había que escribir el código para tenerlas, con el detector ya funcionando y
+sin nada que lo demostrara en pantalla. Las dibuja `OwnHands`, que usan el
+lobby y el salón: tenerlo escrito dos veces sería tenerlo distinto en cuanto
+alguien tocara uno de los dos.
 
 | Dónde | Mano | Cursor |
 |---|---|---|
-| Lobby | no | **sí**, siempre |
-| Salón, clase en curso | **sí** | solo mientras corre el contador |
-| Salón, profesor armando | no | **sí**, siempre |
-| Modo mouse | no | **sí**, siempre |
+| Lobby | **sí** | **sí** |
+| Salón, clase en curso | **sí** | **sí** |
+| Salón, profesor armando | **sí** | **sí** |
+| Modo mouse | no | **sí** |
 
-El profesor armando el salón no ve su mano porque la pantalla es casi toda
-paneles y la mano los tapa; por eso ahí manda el cursor. Las dos marcas a la
-vez sobran, pero ninguna de las dos deja sin saber a qué se apunta.
+**Las dos marcas se ven siempre.** Antes se escondía una para que no hubiera
+"dos punteros", y la regla sobraba. Tampoco se dibujaba la mano mientras el
+profesor armaba el salón, con el argumento de que la pantalla es casi toda
+paneles y la mano los tapa: el argumento era malo, porque es justo la pantalla
+donde más se usa —se pulsa, se arrastra y se sacan piezas— y esconderla deja
+sin saber si el detector la está viendo. Si tapan algo, lo que hay que mover
+son los paneles.
 
-Tener las dos cosas a la vez no funciona, y no es cuestión de afinarlas. El
-cursor lleva una ganancia de 1,9 para que un movimiento corto alcance toda la
-pantalla —sin eso hay que estirar el brazo hasta el borde del cuadro, que es
-la fatiga que el documento marca como riesgo—, mientras que la forma de la
-mano va en metros reales, sin amplificar. Son dos marcas que dicen lo mismo y
-que no caen en el mismo sitio.
+Colocar y dibujar siguen siendo dos pasos separados en `OwnHands`, porque con
+mouse no hay mano que dibujar pero su posición sí viaja en la pose.
+
+Mano y cursor a la vez no se estorban, porque **caen sobre el mismo rayo**: la
+mano se ancla al revés —primero dónde tiene que caer el punto con el que se
+apunta, y después se retrocede hasta la muñeca—, así que el dedo y el cursor
+quedan alineados en pantalla aunque estén a distintas distancias. La mano, a
+medio metro; el cursor, allá donde el rayo toca. Sin ese anclaje invertido no
+funcionaría: el cursor lleva una ganancia de 1,9 para que un movimiento corto
+alcance toda la pantalla, mientras que la forma de la mano va en metros
+reales.
 
 Por eso, con la mano haciendo de puntero, se coloca al revés de lo normal:
 primero se calcula dónde tiene que caer **la punta del índice** sobre el rayo,
@@ -310,19 +344,77 @@ que la mano se adentra en la escena hacia lo que hay sobre la mesa. Recogerla
 contra el pecho la trae hacia la cara, donde se ve grande solo por
 perspectiva: su tamaño en metros no cambia nunca.
 
+#### Cada cuánto se infiere, y cómo se ajusta solo
+
+La inferencia **no va al ritmo del render ni al de la cámara**. Va a la
+cadencia que el propio detector decide midiendo lo que cuesta una inferencia
+en ese equipo, y el render dibuja a 60 adelantando la última medición.
+
+La regla es una división. Si una inferencia cuesta `d` ms, correrla `f` veces
+por segundo gasta `d · f / 1000` de un núcleo; fijando ese gasto en la mitad,
+la cadencia sale sola: `f = 500 / d`. En un portátil `d` ronda los 12 ms y la
+cadencia se va al techo de 24 Hz; en un celular de gama media pasa de 40 ms y
+baja al piso de 10, **sin medir el modelo del teléfono y sin mantener una
+tabla de equipos que envejece**.
+
+Bajar la cadencia no añade retraso, y eso es lo que la hace aceptable: cada
+inferencia se corre sobre el cuadro **recién llegado**, así que lo único que
+baja es cada cuánto se refresca, no cuánto tarda en llegar.
+
+**Las dos manos se buscan siempre**, y eso no se negocia por rendimiento. Aquí
+hubo un segundo escalón que pasaba a buscar una sola mano cuando la cadencia
+llevaba un rato clavada en su piso. Ahorraba de verdad y está quitado de todos
+modos: se encendía solo, en silencio, y dejaba sin la segunda mano justo a
+quien tenía el equipo más justo. Un ahorro que apaga una función no es una
+degradación elegante, es una función menos.
+
+Todo esto se puede mirar, y hay que poder mirarlo: la vista de depuración
+muestra la cadencia medida y la buscada, lo que cuesta una inferencia, el
+retraso real de punta a punta, el delegado (GPU o CPU) y cuántas manos se
+están buscando. El equilibrio entre fluidez y consumo no se ajusta a ciegas:
+sin ver el costo no hay forma de saber si la cadencia bajó porque el equipo no
+da o porque el regulador se pasó.
+
+Los umbrales de confianza se quedan todos en el medio, y el primero tiene una
+razón que costó encontrar: **`minHandDetectionConfidence` es también la puerta
+por la que entra la segunda mano.** No filtra "cosas que no son manos", filtra
+"manos que todavía no se seguían", y la segunda mano es exactamente eso.
+Subirlo buscando menos falsos positivos hacía que costara aparecer. Contra el
+ruido están el gesto sostenido y la ventana de pérdida, que no le cierran la
+puerta a nada real.
+
+El modelo y el runtime se sirven **desde el propio origen**, no del CDN de
+Google. Son 7,5 MB que antes se bajaban en cada arranque en frío: en el wifi
+de un campus eso es el primer cuello de toda la experiencia, y en una red que
+filtre dominios externos no arranca en absoluto. Los deja ahí
+`scripts/vendor-mediapipe.mjs`, que corre en `postinstall`; si no hay red al
+instalar, avisa y el cliente se queda con el CDN como respaldo.
+
 #### Retraso: se adelanta, no se suaviza más
 
 El cuadro que se está dibujando se capturó hace rato —entre captura, detección
 y mensaje de vuelta pasan fácil 100 ms—, y durante todo ese tiempo el cursor
 dibuja donde **estaba** la mano. Bajar el suavizado solo reduce una parte de
 ese retraso; aquí se cancela adelantando la posición por la velocidad que el
-filtro One Euro ya calcula de paso, acotada a 90 ms. Con la mano quieta la
+filtro One Euro ya calcula de paso, acotada a 120 ms. Con la mano quieta la
 velocidad es cero, así que no añade ni un píxel de temblor.
 
-La captura va por `requestVideoFrameCallback`, que avisa una vez por cuadro de
-la cámara y no por refresco de pantalla: así no se gasta nada procesando el
-mismo cuadro dos veces. Y en cuanto el worker contesta, el cuadro siguiente
-sale en el acto en vez de esperar al siguiente tic del reloj.
+El retraso se mide **desde que la cámara capturó el cuadro**, no desde que se
+mandó al worker. `requestVideoFrameCallback` avisa una vez por cuadro de cámara
+—no por refresco de pantalla, así que no se gasta nada procesando el mismo
+cuadro dos veces— y de paso entrega el instante de captura. Sin eso, la
+exposición y la cola de la cámara quedan fuera de la cuenta, el retraso medido
+sale menor que el real y el adelanto corrige de menos. En el navegador que no
+traiga ese aviso se estima, y la vista de depuración lo marca con un `~` para
+no confundir una medición con la otra.
+
+Y adelantar se recorta cuando la mano **frena**. El adelanto confía en que la
+velocidad del último cuadro sigue valiendo; frenando en seco eso es falso —la
+velocidad va suavizada y llega tarde al cambio— y el puntero se pasa de largo
+y vuelve. Comparar la velocidad nueva contra la anterior dice cuándo está
+pasando, porque es justo entonces cuando cae. Con la mano en movimiento
+sostenido las dos coinciden y no se recorta nada: la guardia **no cuesta nada
+en el caso normal**, que es la propiedad que la hace aceptable.
 
 Los puntos se pueden ver en pantalla con **Mostrar puntos de la mano**, en los
 controles de cámara. No es un adorno: sirve para ver por qué el detector no
@@ -331,45 +423,69 @@ comprobar que izquierda y derecha son las que uno cree, y para leer la
 distancia estimada de cada mano en metros, que es lo único de la profundidad
 que no se puede juzgar a ojo.
 
-La mano propia se dibuja en el salón y no en el lobby: ver más abajo. No se
-dibuja mientras el profesor **arma el salón**, porque ahí la pantalla es casi
-toda paneles y la mano los tapa; vuelve al empezar la clase.
+La mano propia se dibuja desde el lobby: ver más abajo. No se dibuja mientras
+el profesor **arma el salón**, porque ahí la pantalla es casi toda paneles y la
+mano los tapa; vuelve al empezar la clase.
 
-| Gesto | Acción |
-|---|---|
-| Índice extendido | Apuntar |
-| **Mano quieta sobre algo** | **Tomarlo: un botón o una pieza, da igual** |
-| Pellizco | Seleccionar, pulsar un botón, soltar la pieza que se lleva |
-| Puño cerrado | Agarrar y mover; sobre un botón, pulsarlo |
-| Mano abierta | Soltar lo que se agarró con el puño |
-| Mano abierta y arriba 1 s | Pedir la palabra |
+**De dónde sale el puntero depende de si llevas algo.** Con la mano libre, de
+la punta del índice: señalar con el dedo es el gesto que la gente hace sola.
+Con una pieza en la mano, del **centro de la palma** — porque la punta del
+índice se desploma hacia la palma al abrir y cerrar la mano, así que con ella
+mandando el propio gesto de soltar movería la pieza en el instante de
+soltarla: aterrizaría donde no se apuntaba. La palma no se desplaza con los
+dedos. El cambio no se nota porque ocurre cuando la pieza ya está tomada, y en
+ese momento lo que se sigue con la vista es la pieza.
 
-**La espera sostenida vale para todo: botones, piezas y deslizadores.**
-Apuntas con el dedo, te quedas quieto, y un anillo se llena sobre lo que estés
-apuntando. Al completarse, la pieza es tuya o el deslizador salta a donde
-señalas. Importa porque un gesto es justo lo que peor se lee cuando el
-detector va lento, y esta vía no depende de ninguno: solo de apuntar y
-esperar. El pellizco sigue existiendo como atajo, pero ya no es obligatorio
-en ningún sitio — antes los deslizadores solo se podían mover pellizcando.
+La marca de apuntar sobre el dedo **solo sale mientras se pellizca**.
+Permanente no decía nada —la punta del índice ya es uno de los nudos grandes de
+la mano dibujada— y competía con él por la atención. Apareciendo solo con el
+pellizco pasa a querer decir algo: *esto es lo que voy a tomar*.
 
-Los deslizadores se rearman en vez de bloquearse: un deslizador se ajusta
-varias veces seguidas, al revés que un botón, que no debe dispararse solo una
-y otra vez mientras se le mira.
+**Apunta y espera** a que se llene el anillo. Eso vale para **todo** lo que
+responde —un botón, un deslizador, una pieza— y es la vía que siempre funciona,
+porque no depende de que se lea ningún gesto. **Cerrar la mano** hace lo mismo,
+pero ya.
 
-El anillo **solo aparece mientras el contador corre**. Sin nada debajo no se
-dibuja nada, que es lo que diferencia esto de llevar un cursor permanente en
-pantalla.
+| Control | Apuntar y esperar, o cerrar la mano | Se suelta |
+|---|---|---|
+| **Botón** | lo pulsa | — |
+| **Deslizador** | lo **engancha**: queda prendido y sigue tu mano aunque la abras | cierras la mano otra vez, o te sales de su eje |
+| **Pieza** | la toma | **abres la mano** |
 
-Una pieza tomada así no se suelta abriendo la mano, porque la mano que apunta
-ya está abierta y se caería en el aire nada más tomarla. Se suelta
-pellizcando, o cerrando el puño y abriéndolo — igual que una pieza sacada del
-panel de objetos.
+Las dos vías hacen **lo mismo en todas partes**, y eso es lo que las hace
+convivir. El conflicto que hubo aquí era otro: el mismo gesto significando
+cosas distintas según dónde cayera —el pellizco pulsaba un botón pero *soltaba*
+una pieza—, y eso sí había que quitarlo.
 
-Dentro del salón el puntero sale del **centro de la palma**, no de la punta
-del índice: la punta se desploma hacia la palma al cerrar la mano, y un cursor
-que la siguiera haría saltar la pieza en el instante exacto de agarrarla. En
-el lobby sí manda la punta del índice, porque ahí no hay nada que agarrar y
-señalar un portal con el dedo es el gesto que la gente hace sola.
+El contador estuvo un tiempo solo en las piezas, con el argumento de que un
+botón se pulsa cerrando la mano y que escribir un código de seis dígitos
+esperando 850 ms por tecla serían cinco segundos. El argumento es cierto y daba
+igual: **en el editor no hay piezas**, solo botones y deslizadores, así que en
+toda esa pantalla el contador no aparecía nunca y lo único que quedaba era el
+gesto que peor lee el detector. El profesor se quedaba apuntando a un botón que
+no se pulsaba. Por eso el contador es universal y el atajo es opcional, y no al
+revés.
+
+Un **deslizador** se ajusta, no se lleva: por eso se engancha. Sostener la mano
+cerrada durante todo un recorrido cansa el brazo y el detector pierde el
+pellizco a mitad de camino. Soltar un ajuste de cámara tiene que ser
+deliberado; una pieza, en cambio, se te puede caer y no pasa nada.
+
+Lo que suelta es **el gesto de abrir**, no estar abierto. Importa: apuntar es
+la mano casi abierta, así que si contara el estado, una pieza tomada con el
+contador se caería en el mismo instante de tomarla. Abrir del todo —los cinco
+dedos— sí es un flanco, y es un gesto que nadie hace sin querer. Lo sujeta
+`opensHand`, con su prueba.
+
+Con mouse no hay contador ni gancho: el click toma y el click suelta, y el
+deslizador se arrastra con el botón pulsado. No son dos interfaces —lo que se
+ve es lo mismo, tomar y soltar—; es que el contador y el gancho existen **para
+compensar un gesto que no se puede sostener**, y un botón de mouse sí se
+sostiene.
+
+La única excepción es que **una pieza recién tomada no se suelta en el mismo
+gesto** (`SETTLE_MS`, 300 ms), porque tomar y soltar pueden caer juntos: con
+mouse un clic es apretar y soltar casi a la vez.
 
 **Pedir la palabra y soltar comparten gesto**, y lo único que los separa es la
 altura. Por eso el detector se congela mientras llevas una pieza: soltar algo
@@ -378,16 +494,11 @@ cada vez que dejas una pieza en la parte de arriba del cuadro. Se congela en
 vez de bajar la mano, porque quien ya la pidió no debería perderla por recoger
 un cubo.
 
-Abrir la mano suelta lo que se agarró cerrando el puño. Una pieza recién sacada
-del panel llega a una mano que nunca se cerró, así que para esa el gesto es el
-pellizco: si bastara con abrir, se caería en el aire en el mismo instante de
-aparecer.
-
-Pellizcar pulsa siempre, aunque sea el mismo botón que la vez anterior: un
-código con dos dígitos iguales seguidos se escribe pulsando dos veces sin mover
-la mano. La espera sostenida sí lleva guardia —si no, quedarse mirando un botón
-lo dispararía una vez por segundo—, así que para repetir por esa vía hay que
-salir y volver.
+Cerrar la mano pulsa siempre, aunque sea el mismo botón que la vez anterior: un
+código con dos dígitos iguales seguidos se escribe cerrándola dos veces sin
+moverla. No hace falta guardia contra el repique porque se mira el **flanco**
+—el instante en que la mano se cierra— y no el estado: con la mano ya cerrada,
+barrer la fila de botones no dispara ninguno.
 
 ## Infraestructura: el túnel y el audio
 
@@ -480,6 +591,46 @@ VITE_HAND_MODEL_URL=/models/hand_landmarker.task
 ```
 
 Eso además evita una petición a un tercero desde el dispositivo del estudiante.
+
+### La luz: un sol y un cielo, y nada más
+
+El entorno 360 es **fondo, no luz**. Son dos cosas distintas y conviene que lo
+sigan siendo.
+
+Antes la foto hacía las dos: se asignaba a `scene.environment`, así que cada
+material PBR de la escena la muestreaba en cada píxel. Y no era solo el
+muestreo: asignar `scene.environment` hace que three genere un **PMREM** —un
+mapa de entorno prefiltrado, con varias pasadas de desenfoque a textura— cada
+vez que la foto cambia. Todo eso para iluminar una mesa, tres cubos y unos
+avatares de colores planos.
+
+Ahora la luz la ponen dos luces fijas:
+
+- una **direccional** que hace de sol y da el volumen —sin ella una esfera y un
+  cilindro del mismo color se ven igual—;
+- una **hemisférica** que hace de cielo: aclara por arriba, oscurece por abajo
+  y evita que las caras en sombra queden negras. Es luz ambiental, pero con
+  dirección, y cuesta lo mismo.
+
+Dos, siempre las mismas. Antes eran cuatro con la habitación en blanco y otra
+configuración distinta con un entorno puesto: dos escenas que iluminar y la
+cara se pagaba justo cuando ya había un paisaje detrás.
+
+Los materiales pasaron de `MeshStandardMaterial` a `MeshLambertMaterial`. El
+suelo es mate, la mesa es mate y los cubos son mates: todo el aparato PBR se
+gastaba en calcular un reflejo especular que no se ve.
+
+**No hay sombras en tiempo real**, y es deliberado: lo que hace entender dónde
+está una pieza es el imán —que la apoya en la mesa o en el piso— y la rejilla
+del suelo. Un mapa de sombras es una pasada entera de la escena por cuadro
+para algo que ya está resuelto.
+
+Lo que sí se queda es el **mapeo de tonos** mientras haya foto: es una cuenta
+por píxel en el shader, barata, y sin ella un cielo con valores muy por encima
+de 1 se ve como una mancha blanca.
+
+Medido en la prueba de navegador, que corre sobre un renderizador por software
+y por tanto exagera el coste de CPU: **de 10–12 fps a 27**.
 
 ### Los entornos 360
 
